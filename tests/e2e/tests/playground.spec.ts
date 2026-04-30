@@ -143,7 +143,7 @@ test.describe('EF Core Playground - Groupement par auteur', () => {
         const editorValue = await page.evaluate(() => {
             return (window as any).monacoInterop.getValue();
         });
-        expect(editorValue).toContain('DernierePublication');
+        expect(editorValue).toContain('Blogs = string.Join');
 
         // Execute
         await page.getByRole('button', { name: /Exécuter/ }).click();

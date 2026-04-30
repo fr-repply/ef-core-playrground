@@ -40,7 +40,7 @@
             "return await db.Posts\n    .Where(p => p.Title.Contains(\"EF Core\"))\n    .Select(p => new { p.Title, p.PublishedDate })\n    .ToListAsync();"),
 
         new Example("Groupement par auteur",
-            "return await db.Authors\n    .Select(a => new {\n        Auteur = a.Name,\n        NbPosts = a.Posts.Count(),\n        DernierePublication = a.Posts.Max(p => (DateTime?)p.PublishedDate)\n    })\n    .ToListAsync();"),
+            "return await db.Authors\n    .Select(a => new {\n        Auteur = a.Name,\n        NbPosts = a.Posts.Count(),\n        Blogs = string.Join(\", \", a.Posts.Select(p => p.Blog.Name).Distinct())\n    })\n    .ToListAsync();"),
 
         new Example("Top 5 posts récents",
             "return await db.Posts\n    .OrderByDescending(p => p.PublishedDate)\n    .Take(5)\n    .Select(p => new { p.Title, p.PublishedDate, Blog = p.Blog.Name })\n    .ToListAsync();"),

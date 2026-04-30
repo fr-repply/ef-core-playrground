@@ -64,7 +64,7 @@
     private int? executionTimeMs;
     private ExecutionResult? currentResult;
     private DotNetObjectReference<Playground>? dotNetRef;
-    private readonly CodeExecutionService executionService = new();
+    private CodeExecutionService? executionService;
 
     private static readonly string DefaultCode = CodeExecutionService.BuildFullCode(
         "// Bienvenue dans le Playground EF Core 10 !\n" +
@@ -82,6 +82,7 @@
     {
         if (firstRender)
         {
+            executionService = new CodeExecutionService(JS);
             dotNetRef = DotNetObjectReference.Create(this);
             await JS.InvokeVoidAsync("monacoInterop.initialize", "monaco-editor-container", DefaultCode, dotNetRef,
                 CodeExecutionService.PrefixLineCount, CodeExecutionService.SuffixLineCount);
@@ -96,7 +97,7 @@
 
     private async Task ExecuteCode()
     {
-        if (isExecuting) return;
+        if (isExecuting || executionService == null) return;
         isExecuting = true;
         currentResult = null;
         executionTimeMs = null;
@@ -153,6 +154,6 @@
     public void Dispose()
     {
         dotNetRef?.Dispose();
-        executionService.Dispose();
+        executionService?.Dispose();
     }
 }

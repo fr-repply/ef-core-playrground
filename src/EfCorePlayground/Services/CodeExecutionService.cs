@@ -6,8 +6,9 @@ using System.Text;
 using System.Text.Json;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
-using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Storage;
+using Microsoft.JSInterop;
 using EfCorePlayground.Models;
 
 namespace EfCorePlayground.Services;
@@ -21,7 +22,12 @@ public class CodeExecutionService
         ReferenceHandler = System.Text.Json.Serialization.ReferenceHandler.IgnoreCycles
     };
 
-    private SqliteConnection? _connection;
+    private readonly IJSRuntime _jsRuntime;
+
+    public CodeExecutionService(IJSRuntime jsRuntime)
+    {
+        _jsRuntime = jsRuntime;
+    }
 
     /// <summary>
     /// Number of boilerplate lines before user code in the full template.
@@ -191,13 +197,16 @@ public class CodeExecutionService
 
     private async Task<ExecutionResult> RunCompiledCode(Assembly assembly)
     {
-        // Create a fresh database for each execution
-        _connection?.Dispose();
-        _connection = new SqliteConnection("Data Source=:memory:");
-        await _connection.OpenAsync();
+        // Initialize a fresh PGlite instance for each execution
+        await _jsRuntime.InvokeVoidAsync("pgliteInterop.init");
+
+        var commandInterceptor = new PgLiteCommandInterceptor(_jsRuntime);
+        var connectionInterceptor = new PgLiteConnectionInterceptor();
 
         var options = new DbContextOptionsBuilder<PlaygroundDbContext>()
-            .UseSqlite(_connection)
+            .UseNpgsql("Host=pglite;Database=playground")
+            .ReplaceService<IRelationalDatabaseCreator, PgLiteDatabaseCreator>()
+            .AddInterceptors(connectionInterceptor, commandInterceptor)
             .Options;
 
         await using var context = new PlaygroundDbContext(options);
@@ -287,7 +296,7 @@ public class CodeExecutionService
 
     public void Dispose()
     {
-        _connection?.Dispose();
+        // PGlite cleanup is handled via JS interop when needed
     }
 }
 
