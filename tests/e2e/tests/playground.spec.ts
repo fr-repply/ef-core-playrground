@@ -124,3 +124,145 @@ test.describe('EF Core Playground', () => {
         await expect(schemaHeading).toBeVisible();
     });
 });
+
+test.describe('EF Core Playground - Groupement par auteur', () => {
+
+    test.beforeEach(async ({ page }) => {
+        await page.goto('/');
+        await expect(page.locator('nav')).toBeVisible({ timeout: 90000 });
+        await expect(page.locator('#monaco-editor-container .monaco-editor')).toBeVisible({ timeout: 60000 });
+    });
+
+    test('should execute groupement par auteur without APPLY error', async ({ page }) => {
+        test.slow();
+
+        // Click the example
+        await page.getByRole('button', { name: 'Groupement par auteur' }).click();
+
+        // Verify editor content loaded
+        const editorValue = await page.evaluate(() => {
+            return (window as any).monacoInterop.getValue();
+        });
+        expect(editorValue).toContain('DernierePublication');
+
+        // Execute
+        await page.getByRole('button', { name: /Exécuter/ }).click();
+
+        // Wait for results
+        const resultOrError = page.locator('#results-table, .alert-danger');
+        await expect(resultOrError.first()).toBeVisible({ timeout: 180000 });
+
+        // Should succeed with a table (3 authors)
+        const table = page.locator('#results-table');
+        await expect(table).toBeVisible();
+        await expect(table.locator('thead')).toContainText('Auteur');
+        await expect(table.locator('tbody tr')).toHaveCount(3);
+    });
+});
+
+test.describe('EF Core Playground - Projectables', () => {
+
+    test.beforeEach(async ({ page }) => {
+        await page.goto('/');
+        await expect(page.locator('nav')).toBeVisible({ timeout: 90000 });
+        await expect(page.locator('#monaco-editor-container .monaco-editor')).toBeVisible({ timeout: 60000 });
+    });
+
+    test('should display Projectables examples in the panel', async ({ page }) => {
+        await expect(page.getByRole('button', { name: /Projectable: Blogs populaires/ })).toBeVisible();
+        await expect(page.getByRole('button', { name: /Projectable: Auteurs productifs/ })).toBeVisible();
+        await expect(page.getByRole('button', { name: /Projectable: Posts récents/ })).toBeVisible();
+    });
+
+    test('should display computed properties in schema panel', async ({ page }) => {
+        // Check that computed properties are shown in schema
+        const schemaBody = page.locator('.card-body').first();
+        await expect(schemaBody).toContainText('PostCount');
+        await expect(schemaBody).toContainText('IsPopular');
+        await expect(schemaBody).toContainText('computed');
+    });
+
+    test('should execute Projectable: Blogs populaires', async ({ page }) => {
+        test.slow();
+
+        // Click the example
+        await page.getByRole('button', { name: /Projectable: Blogs populaires/ }).click();
+
+        // Verify editor content
+        const editorValue = await page.evaluate(() => {
+            return (window as any).monacoInterop.getValue();
+        });
+        expect(editorValue).toContain('IsPopular');
+        expect(editorValue).toContain('PostCount');
+
+        // Execute
+        await page.getByRole('button', { name: /Exécuter/ }).click();
+
+        // Wait for results
+        const resultOrError = page.locator('#results-table, .alert-danger');
+        await expect(resultOrError.first()).toBeVisible({ timeout: 180000 });
+
+        // Should succeed with a table — blogs with rating >= 4 (3 blogs: .NET, Architecture, Data & EF Core)
+        const table = page.locator('#results-table');
+        await expect(table).toBeVisible();
+        await expect(table.locator('thead')).toContainText('Name');
+        await expect(table.locator('thead')).toContainText('PostCount');
+        await expect(table.locator('tbody tr')).toHaveCount(3);
+    });
+
+    test('should execute Projectable: Auteurs productifs', async ({ page }) => {
+        test.slow();
+
+        // Click the example
+        await page.getByRole('button', { name: /Projectable: Auteurs productifs/ }).click();
+
+        // Verify editor content
+        const editorValue = await page.evaluate(() => {
+            return (window as any).monacoInterop.getValue();
+        });
+        expect(editorValue).toContain('IsProductive');
+        expect(editorValue).toContain('PostCount');
+
+        // Execute
+        await page.getByRole('button', { name: /Exécuter/ }).click();
+
+        // Wait for results
+        const resultOrError = page.locator('#results-table, .alert-danger');
+        await expect(resultOrError.first()).toBeVisible({ timeout: 180000 });
+
+        // Should succeed — authors with 3+ posts
+        const table = page.locator('#results-table');
+        await expect(table).toBeVisible();
+        await expect(table.locator('thead')).toContainText('Name');
+        await expect(table.locator('thead')).toContainText('PostCount');
+    });
+
+    test('should execute Projectable: Posts récents avec tags', async ({ page }) => {
+        test.slow();
+
+        // Click the example
+        await page.getByRole('button', { name: /Projectable: Posts récents/ }).click();
+
+        // Verify editor content
+        const editorValue = await page.evaluate(() => {
+            return (window as any).monacoInterop.getValue();
+        });
+        expect(editorValue).toContain('IsRecent');
+        expect(editorValue).toContain('TagCount');
+
+        // Execute
+        await page.getByRole('button', { name: /Exécuter/ }).click();
+
+        // Wait for results
+        const resultOrError = page.locator('#results-table, .alert-danger');
+        await expect(resultOrError.first()).toBeVisible({ timeout: 180000 });
+
+        // Should succeed — posts from 2024+
+        const table = page.locator('#results-table');
+        await expect(table).toBeVisible();
+        await expect(table.locator('thead')).toContainText('Title');
+        await expect(table.locator('thead')).toContainText('TagCount');
+        // Posts from 2024: PostId 6,7,8,9,10 = 5 posts
+        await expect(table.locator('tbody tr')).toHaveCount(5);
+    });
+});

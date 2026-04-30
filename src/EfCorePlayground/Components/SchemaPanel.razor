@@ -59,6 +59,8 @@
             new ColumnInfo("Url", "string", false),
             new ColumnInfo("Rating", "int", false),
             new ColumnInfo("CreatedAt", "DateTime", false),
+            new ColumnInfo("PostCount", "⚡ int (computed)", false),
+            new ColumnInfo("IsPopular", "⚡ bool (computed)", false),
         }),
         new TableInfo("Posts", new[]
         {
@@ -68,6 +70,8 @@
             new ColumnInfo("PublishedDate", "DateTime", false),
             new ColumnInfo("BlogId", "int (FK)", false),
             new ColumnInfo("AuthorId", "int (FK)", false),
+            new ColumnInfo("TagCount", "⚡ int (computed)", false),
+            new ColumnInfo("IsRecent", "⚡ bool (computed)", false),
         }),
         new TableInfo("Authors", new[]
         {
@@ -75,6 +79,8 @@
             new ColumnInfo("Name", "string", false),
             new ColumnInfo("Email", "string", false),
             new ColumnInfo("Bio", "string", false),
+            new ColumnInfo("PostCount", "⚡ int (computed)", false),
+            new ColumnInfo("IsProductive", "⚡ bool (computed)", false),
         }),
         new TableInfo("Tags", new[]
         {

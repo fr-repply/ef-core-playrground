@@ -1,3 +1,5 @@
+using EntityFrameworkCore.Projectables;
+
 namespace EfCorePlayground.Models;
 
 public class Author
@@ -8,4 +10,10 @@ public class Author
     public string Bio { get; set; } = string.Empty;
 
     public List<Post> Posts { get; set; } = new();
+
+    [Projectable]
+    public int PostCount => Posts.Count;
+
+    [Projectable]
+    public bool IsProductive => Posts.Count >= 3;
 }

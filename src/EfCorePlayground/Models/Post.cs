@@ -1,3 +1,5 @@
+using EntityFrameworkCore.Projectables;
+
 namespace EfCorePlayground.Models;
 
 public class Post
@@ -14,4 +16,10 @@ public class Post
     public Author Author { get; set; } = null!;
 
     public List<Tag> Tags { get; set; } = new();
+
+    [Projectable]
+    public int TagCount => Tags.Count;
+
+    [Projectable]
+    public bool IsRecent => PublishedDate >= new DateTime(2024, 1, 1);
 }
