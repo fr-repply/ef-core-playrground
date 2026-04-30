@@ -24,7 +24,10 @@ test.describe('EF Core Playground', () => {
 
     test('should display the examples panel', async ({ page }) => {
         await expect(page.getByText('Exemples', { exact: true })).toBeVisible();
-        await expect(page.getByRole('button', { name: 'Lister tous les blogs' })).toBeVisible();
+        // Scroll into view since DataViewer panel may push it down
+        const btn = page.getByRole('button', { name: 'Lister tous les blogs' });
+        await btn.scrollIntoViewIfNeeded();
+        await expect(btn).toBeVisible();
     });
 
     test('should have the Monaco editor loaded', async ({ page }) => {
@@ -60,6 +63,9 @@ test.describe('EF Core Playground', () => {
     });
 
     test('should load example into editor', async ({ page }) => {
+        // Collapse schema to make room for examples
+        await page.getByText('Schéma').click();
+
         // Click on example
         await page.getByRole('button', { name: 'Blogs avec rating' }).click();
 
@@ -91,6 +97,9 @@ test.describe('EF Core Playground', () => {
     });
 
     test('should reset code to default', async ({ page }) => {
+        // Collapse schema to make room for examples
+        await page.getByText('Schéma').click();
+
         // Load an example first
         await page.getByRole('button', { name: 'Lister tous les blogs' }).click();
 

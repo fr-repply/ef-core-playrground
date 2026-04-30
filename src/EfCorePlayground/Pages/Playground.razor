@@ -4,9 +4,10 @@
 
 <div class="container-fluid h-100 py-2">
     <div class="row g-2 h-100">
-        @* Left panel: Schema + Examples *@
+        @* Left panel: Schema + Data Viewer + Examples *@
         <div class="col-md-3 d-flex flex-column overflow-auto h-100">
             <SchemaPanel />
+            <DataViewerPanel @ref="dataViewerPanel" />
             <ExamplesPanel OnExampleSelected="LoadExample" />
         </div>
 
@@ -65,6 +66,7 @@
     private ExecutionResult? currentResult;
     private DotNetObjectReference<Playground>? dotNetRef;
     private CodeExecutionService? executionService;
+    private DataViewerPanel? dataViewerPanel;
 
     private static readonly string DefaultCode = CodeExecutionService.BuildFullCode(
         "// Bienvenue dans le Playground EF Core 10 !\n" +
@@ -115,6 +117,11 @@
             if (currentResult.Success)
             {
                 await JS.InvokeVoidAsync("monacoInterop.clearMarkers");
+                // Refresh data viewer after successful execution
+                if (dataViewerPanel != null)
+                {
+                    await dataViewerPanel.RefreshData();
+                }
             }
             else if (currentResult.Errors?.Count > 0)
             {

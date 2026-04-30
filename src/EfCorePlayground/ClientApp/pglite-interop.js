@@ -1,26 +1,22 @@
 // PGlite JavaScript interop — bridges EF Core to PGlite (in-browser PostgreSQL via WASM)
-let db = null;
-let PGliteModule = null;
+// Uses static import to avoid Vite code-splitting issues with module-scoped variables.
+import { PGlite } from '@electric-sql/pglite';
 
 window.pgliteInterop = {
     /**
      * Initialize a fresh PGlite instance. Destroys any existing one.
      */
     init: async function () {
-        if (db) {
-            try { await db.close(); } catch { }
-            db = null;
+        if (window._pgliteDb) {
+            try { await window._pgliteDb.close(); } catch { }
+            window._pgliteDb = null;
         }
 
         try {
-            if (!PGliteModule) {
-                PGliteModule = await import('@electric-sql/pglite');
-            }
-
-            db = new PGliteModule.PGlite();
-            await db.waitReady;
+            window._pgliteDb = new PGlite();
+            await window._pgliteDb.waitReady;
         } catch (e) {
-            db = null;
+            window._pgliteDb = null;
             throw new Error('PGlite initialization failed: ' + e.message);
         }
     },
@@ -32,9 +28,9 @@ window.pgliteInterop = {
      * @returns {{ columns: string[], rows: any[][], affectedRows: number }}
      */
     query: async function (sql, params) {
-        if (!db) throw new Error('PGlite not initialized. Call init() first.');
+        if (!window._pgliteDb) throw new Error('PGlite not initialized. Call init() first.');
 
-        const result = await db.query(sql, params || []);
+        const result = await window._pgliteDb.query(sql, params || []);
 
         const columns = (result.fields || []).map(f => f.name);
         const rows = (result.rows || []).map(row =>
@@ -60,8 +56,8 @@ window.pgliteInterop = {
      * @returns {{ affectedRows: number }}
      */
     exec: async function (sql) {
-        if (!db) throw new Error('PGlite not initialized. Call init() first.');
-        await db.exec(sql);
+        if (!window._pgliteDb) throw new Error('PGlite not initialized. Call init() first.');
+        await window._pgliteDb.exec(sql);
         return { affectedRows: 0 };
     },
 
@@ -69,9 +65,9 @@ window.pgliteInterop = {
      * Close and destroy the PGlite instance.
      */
     close: async function () {
-        if (db) {
-            try { await db.close(); } catch { }
-            db = null;
+        if (window._pgliteDb) {
+            try { await window._pgliteDb.close(); } catch { }
+            window._pgliteDb = null;
         }
     }
 };
