@@ -2,8 +2,20 @@
 // Monaco AMD loader is served from vendor/monaco/min/vs/loader.js (copied by vite-plugin-static-copy)
 window.monacoInterop = {
     editor: null,
+    prefixLines: 0,
+    suffixLines: 0,
+    _decorationCollection: null,
 
-    initialize: function (elementId, defaultCode, dotNetRef) {
+    initialize: function (elementId, defaultCode, dotNetRef, prefixLines, suffixLines) {
+        window.monacoInterop.prefixLines = prefixLines || 0;
+        window.monacoInterop.suffixLines = suffixLines || 0;
+
+        // Inject CSS for boilerplate line styling
+        var style = document.createElement('style');
+        style.textContent =
+            '.boilerplate-text { opacity: 0.45 !important; }';
+        document.head.appendChild(style);
+
         // Determine the base path for Monaco files (works with <base href="/...">)
         var base = document.querySelector('base')?.getAttribute('href') || '/';
         if (!base.endsWith('/')) base += '/';
@@ -30,6 +42,9 @@ window.monacoInterop = {
                 wordWrap: 'on'
             });
 
+            // Apply boilerplate decorations
+            window.monacoInterop._applyBoilerplateDecorations();
+
             // Ctrl+Enter to execute
             window.monacoInterop.editor.addAction({
                 id: 'execute-code',
@@ -42,6 +57,47 @@ window.monacoInterop = {
         });
     },
 
+    _applyBoilerplateDecorations: function () {
+        if (!window.monacoInterop.editor) return;
+        var model = window.monacoInterop.editor.getModel();
+        var totalLines = model.getLineCount();
+        var decorations = [];
+        var minExpectedLines = window.monacoInterop.prefixLines + window.monacoInterop.suffixLines + 1;
+
+        // Only apply decorations if the code has enough lines (i.e. looks like a full template)
+        if (totalLines >= minExpectedLines) {
+            // Dim prefix lines (usings, namespace, class, method signature)
+            if (window.monacoInterop.prefixLines > 0) {
+                decorations.push({
+                    range: new monaco.Range(1, 1, window.monacoInterop.prefixLines, model.getLineMaxColumn(window.monacoInterop.prefixLines)),
+                    options: {
+                        isWholeLine: true,
+                        inlineClassName: 'boilerplate-text'
+                    }
+                });
+            }
+
+            // Dim suffix lines (closing braces)
+            if (window.monacoInterop.suffixLines > 0) {
+                var suffixStart = totalLines - window.monacoInterop.suffixLines + 1;
+                decorations.push({
+                    range: new monaco.Range(suffixStart, 1, totalLines, model.getLineMaxColumn(totalLines)),
+                    options: {
+                        isWholeLine: true,
+                        inlineClassName: 'boilerplate-text'
+                    }
+                });
+            }
+        }
+
+        // Replace existing decorations
+        if (window.monacoInterop._decorationCollection) {
+            window.monacoInterop._decorationCollection.clear();
+        }
+        window.monacoInterop._decorationCollection =
+            window.monacoInterop.editor.createDecorationsCollection(decorations);
+    },
+
     getValue: function () {
         if (window.monacoInterop.editor) {
             return window.monacoInterop.editor.getValue();
@@ -52,6 +108,7 @@ window.monacoInterop = {
     setValue: function (value) {
         if (window.monacoInterop.editor) {
             window.monacoInterop.editor.setValue(value);
+            window.monacoInterop._applyBoilerplateDecorations();
         }
     },
 

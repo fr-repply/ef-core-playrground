@@ -23,12 +23,51 @@ public class CodeExecutionService
 
     private SqliteConnection? _connection;
 
-    public async Task<ExecutionResult> ExecuteAsync(string userCode)
+    /// <summary>
+    /// Number of boilerplate lines before user code in the full template.
+    /// </summary>
+    public const int PrefixLineCount = 14;
+
+    /// <summary>
+    /// Number of boilerplate lines after user code in the full template.
+    /// </summary>
+    public const int SuffixLineCount = 3;
+
+    /// <summary>
+    /// Wraps a body code snippet (e.g. "return await db.Blogs.ToListAsync();")
+    /// into the full compilable template shown in the editor.
+    /// </summary>
+    public static string BuildFullCode(string bodyCode)
+    {
+        var lines = bodyCode.Split('\n');
+        var indented = string.Join("\n", lines.Select(l =>
+            string.IsNullOrWhiteSpace(l) ? "" : "            " + l));
+
+        return "using System;\n" +
+               "using System.Collections.Generic;\n" +
+               "using System.Linq;\n" +
+               "using System.Threading.Tasks;\n" +
+               "using Microsoft.EntityFrameworkCore;\n" +
+               "using EntityFrameworkCore.Projectables;\n" +
+               "using EfCorePlayground.Models;\n" +
+               "\n" +
+               "namespace EfCorePlayground.UserCode\n" +
+               "{\n" +
+               "    public static class UserQuery\n" +
+               "    {\n" +
+               "        public static async Task<object?> Execute(PlaygroundDbContext db)\n" +
+               "        {\n" +
+               indented + "\n" +
+               "        }\n" +
+               "    }\n" +
+               "}";
+    }
+
+    public async Task<ExecutionResult> ExecuteAsync(string fullCode)
     {
         try
         {
-            var wrappedCode = WrapUserCode(userCode);
-            var compilation = CreateCompilation(wrappedCode);
+            var compilation = CreateCompilation(fullCode);
 
             using var ms = new MemoryStream();
             var emitResult = compilation.Emit(ms);
@@ -73,30 +112,6 @@ public class CodeExecutionService
         }
     }
 
-    private string WrapUserCode(string userCode)
-    {
-        return $$"""
-            using System;
-            using System.Collections.Generic;
-            using System.Linq;
-            using System.Threading.Tasks;
-            using Microsoft.EntityFrameworkCore;
-            using EntityFrameworkCore.Projectables;
-            using EfCorePlayground.Models;
-
-            namespace EfCorePlayground.UserCode
-            {
-                public static class UserQuery
-                {
-                    public static async Task<object?> Execute(PlaygroundDbContext db)
-                    {
-                        {{userCode}}
-                    }
-                }
-            }
-            """;
-    }
-
     private CSharpCompilation CreateCompilation(string code)
     {
         var syntaxTree = CSharpSyntaxTree.ParseText(code);
@@ -116,6 +131,7 @@ public class CodeExecutionService
     {
         // Force-load assemblies that EF Core depends on but may not be loaded yet in WASM
         _ = typeof(System.ComponentModel.IListSource);
+        _ = typeof(EntityFrameworkCore.Projectables.ProjectableAttribute);
 
         var references = new List<MetadataReference>();
 

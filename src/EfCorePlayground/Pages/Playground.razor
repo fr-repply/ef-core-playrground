@@ -66,26 +66,25 @@
     private DotNetObjectReference<Playground>? dotNetRef;
     private readonly CodeExecutionService executionService = new();
 
-    private const string DefaultCode = @"// Bienvenue dans le Playground EF Core 10 !
-// Écrivez vos requêtes LINQ ci-dessous.
-// La variable 'db' est votre DbContext avec les tables :
-//   db.Blogs    (BlogId, Name, Url, Rating, CreatedAt)
-//   db.Posts    (PostId, Title, Content, PublishedDate, BlogId, AuthorId)
-//   db.Authors  (AuthorId, Name, Email, Bio)
-//   db.Tags     (TagId, Name)
-//
-// Exemples :
-//   return await db.Blogs.ToListAsync();
-//   return await db.Posts.Where(p => p.BlogId == 1).ToListAsync();
-
-return await db.Blogs.ToListAsync();";
+    private static readonly string DefaultCode = CodeExecutionService.BuildFullCode(
+        "// Bienvenue dans le Playground EF Core 10 !\n" +
+        "// Écrivez vos requêtes LINQ ci-dessous.\n" +
+        "// La variable 'db' est votre DbContext avec les tables :\n" +
+        "//   db.Blogs, db.Posts, db.Authors, db.Tags\n" +
+        "//\n" +
+        "// Exemples :\n" +
+        "//   return await db.Blogs.ToListAsync();\n" +
+        "//   return await db.Posts.Where(p => p.BlogId == 1).ToListAsync();\n" +
+        "\n" +
+        "return await db.Blogs.ToListAsync();");
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
         if (firstRender)
         {
             dotNetRef = DotNetObjectReference.Create(this);
-            await JS.InvokeVoidAsync("monacoInterop.initialize", "monaco-editor-container", DefaultCode, dotNetRef);
+            await JS.InvokeVoidAsync("monacoInterop.initialize", "monaco-editor-container", DefaultCode, dotNetRef,
+                CodeExecutionService.PrefixLineCount, CodeExecutionService.SuffixLineCount);
         }
     }
 
@@ -140,7 +139,8 @@ return await db.Blogs.ToListAsync();";
 
     private async Task LoadExample(string code)
     {
-        await JS.InvokeVoidAsync("monacoInterop.setValue", code);
+        var fullCode = CodeExecutionService.BuildFullCode(code);
+        await JS.InvokeVoidAsync("monacoInterop.setValue", fullCode);
     }
 
     private async Task ResetCode()
