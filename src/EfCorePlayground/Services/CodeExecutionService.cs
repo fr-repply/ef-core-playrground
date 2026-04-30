@@ -26,7 +26,7 @@ public class CodeExecutionService
     /// <summary>
     /// Number of boilerplate lines before user code in the full template.
     /// </summary>
-    public const int PrefixLineCount = 14;
+    public const int PrefixLineCount = 13;
 
     /// <summary>
     /// Number of boilerplate lines after user code in the full template.
@@ -48,7 +48,6 @@ public class CodeExecutionService
                "using System.Linq;\n" +
                "using System.Threading.Tasks;\n" +
                "using Microsoft.EntityFrameworkCore;\n" +
-               "using EntityFrameworkCore.Projectables;\n" +
                "using EfCorePlayground.Models;\n" +
                "\n" +
                "namespace EfCorePlayground.UserCode\n" +
@@ -131,7 +130,19 @@ public class CodeExecutionService
     {
         // Force-load assemblies that EF Core depends on but may not be loaded yet in WASM
         _ = typeof(System.ComponentModel.IListSource);
-        _ = typeof(EntityFrameworkCore.Projectables.ProjectableAttribute);
+        _ = typeof(System.ComponentModel.TypeConverter);
+        _ = typeof(System.ComponentModel.DataAnnotations.RequiredAttribute);
+
+        // Explicitly load assemblies by name that WASM might not resolve via typeof alone
+        foreach (var name in new[]
+        {
+            "System.ComponentModel.TypeConverter",
+            "System.ComponentModel.Primitives",
+            "System.ComponentModel.Annotations",
+        })
+        {
+            try { Assembly.Load(name); } catch { }
+        }
 
         var references = new List<MetadataReference>();
 

@@ -3,6 +3,7 @@ import { viteStaticCopy } from 'vite-plugin-static-copy';
 import path from 'path';
 
 export default defineConfig({
+    base: '/vendor/',
     build: {
         outDir: 'wwwroot/vendor',
         emptyOutDir: true,
