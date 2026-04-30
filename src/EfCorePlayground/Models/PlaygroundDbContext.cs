@@ -1,4 +1,5 @@
 using Microsoft.EntityFrameworkCore;
+using EntityFrameworkCore.Projectables;
 using EfCorePlayground.Models;
 
 namespace EfCorePlayground.Models;
@@ -11,6 +12,12 @@ public class PlaygroundDbContext : DbContext
     public DbSet<Post> Posts => Set<Post>();
     public DbSet<Author> Authors => Set<Author>();
     public DbSet<Tag> Tags => Set<Tag>();
+
+    protected override void OnConfiguring(DbContextOptionsBuilder optionsBuilder)
+    {
+        optionsBuilder.UseProjectables();
+        base.OnConfiguring(optionsBuilder);
+    }
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {

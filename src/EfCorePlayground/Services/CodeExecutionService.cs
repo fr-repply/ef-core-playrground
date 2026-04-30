@@ -81,6 +81,7 @@ public class CodeExecutionService
             using System.Linq;
             using System.Threading.Tasks;
             using Microsoft.EntityFrameworkCore;
+            using EntityFrameworkCore.Projectables;
             using EfCorePlayground.Models;
 
             namespace EfCorePlayground.UserCode
@@ -113,6 +114,9 @@ public class CodeExecutionService
 
     private List<MetadataReference> GetMetadataReferences()
     {
+        // Force-load assemblies that EF Core depends on but may not be loaded yet in WASM
+        _ = typeof(System.ComponentModel.IListSource);
+
         var references = new List<MetadataReference>();
 
         var loadedAssemblies = AppDomain.CurrentDomain.GetAssemblies()
