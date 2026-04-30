@@ -242,5 +242,5 @@ jobs:
 - [ ] Ajouter un mode « pas à pas » pour décomposer les requêtes LINQ
 - [ ] Sauvegarder/partager des requêtes via URL avec paramètres
 - [ ] Ajouter d'autres schémas de base de données (e-commerce, réseau social, etc.)
-- [ ] Migrer vers PGlite quand le support WASM sera mature
+- [x] ~~Migrer vers PGlite quand le support WASM sera mature~~ (fait — PGlite est intégré comme backend PostgreSQL in-browser)
 - [ ] Ajouter des exercices guidés avec validation automatique
