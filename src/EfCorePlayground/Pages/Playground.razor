@@ -147,7 +147,15 @@
 
     private async Task LoadExample(string code)
     {
-        var fullCode = CodeExecutionService.BuildFullCode(code);
+        string fullCode;
+        if (code.StartsWith("FULLCODE:"))
+        {
+            fullCode = code.Substring("FULLCODE:".Length);
+        }
+        else
+        {
+            fullCode = CodeExecutionService.BuildFullCode(code);
+        }
         await JS.InvokeVoidAsync("monacoInterop.setValue", fullCode);
     }
 

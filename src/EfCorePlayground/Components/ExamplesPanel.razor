@@ -6,7 +6,7 @@
         @foreach (var example in examples)
         {
             <button class="list-group-item list-group-item-action py-2 small"
-                    @onclick="() => OnExampleSelected.InvokeAsync(example.Code)">
+                    @onclick="() => SelectExample(example)">
                 <i class="bi bi-play-circle me-1 text-success"></i>
                 @example.Title
             </button>
@@ -17,7 +17,13 @@
 @code {
     [Parameter] public EventCallback<string> OnExampleSelected { get; set; }
 
-    private record Example(string Title, string Code);
+    private record Example(string Title, string Code, bool IsFullCode = false);
+
+    private void SelectExample(Example example)
+    {
+        var code = example.IsFullCode ? "FULLCODE:" + example.Code : example.Code;
+        OnExampleSelected.InvokeAsync(code);
+    }
 
     private readonly Example[] examples = new[]
     {
@@ -56,5 +62,9 @@
 
         new Example("⚡ Projectable: Posts récents avec tags",
             "// Utilise les propriétés [Projectable] IsRecent et TagCount\nreturn await db.Posts\n    .Where(p => p.IsRecent)\n    .Select(p => new { p.Title, p.TagCount, p.PublishedDate, Blog = p.Blog.Name })\n    .OrderByDescending(p => p.PublishedDate)\n    .ToListAsync();"),
+
+        new Example("⚡ Projectable custom (extension)",
+            "using System;\nusing System.Collections.Generic;\nusing System.Linq;\nusing System.Threading.Tasks;\nusing Microsoft.EntityFrameworkCore;\nusing EntityFrameworkCore.Projectables;\nusing EfCorePlayground.Models;\n\nnamespace EfCorePlayground.UserCode\n{\n    public static class BlogExtensions\n    {\n        [Projectable]\n        public static int TotalPosts(this Blog b) => b.Posts.Count;\n    }\n\n    public static class UserQuery\n    {\n        public static async Task<object?> Execute(PlaygroundDbContext db)\n        {\n            // Utilise une extension [Projectable] définie par l'utilisateur\n            return await db.Blogs\n                .Select(b => new { b.Name, Total = b.TotalPosts() })\n                .ToListAsync();\n        }\n    }\n}",
+            IsFullCode: true),
     };
 }

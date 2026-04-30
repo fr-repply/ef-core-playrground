@@ -124,13 +124,22 @@ public class CodeExecutionService
 
         var references = GetMetadataReferences();
 
-        return CSharpCompilation.Create(
+        var compilation = CSharpCompilation.Create(
             "UserCodeAssembly",
             new[] { syntaxTree },
             references,
             new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary)
                 .WithOptimizationLevel(OptimizationLevel.Release)
                 .WithPlatform(Platform.AnyCpu));
+
+        // Run our lightweight Projectables source generator for user-defined [Projectable] members
+        var generatedTrees = ProjectableCodeGenerator.GenerateProjectableSources(compilation);
+        if (generatedTrees.Count > 0)
+        {
+            compilation = compilation.AddSyntaxTrees(generatedTrees);
+        }
+
+        return compilation;
     }
 
     private List<MetadataReference> GetMetadataReferences()
