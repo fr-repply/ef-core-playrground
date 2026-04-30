@@ -24,7 +24,7 @@ export default defineConfig({
     webServer: {
         command: 'dotnet run --project ../../src/EfCorePlayground --urls http://localhost:5000',
         url: 'http://localhost:5000',
-        reuseExistingServer: !process.env.CI,
+        reuseExistingServer: true,
         timeout: 120000,
     },
 });
