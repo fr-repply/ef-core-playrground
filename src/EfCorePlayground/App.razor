@@ -1,2 +1,10 @@
-@* Minimal Blazor app - UI is handled by Vue.js *@
-@* This component exists only to bootstrap the .NET WASM runtime *@
+<Router AppAssembly="@typeof(App).Assembly">
+    <Found Context="routeData">
+        <RouteView RouteData="@routeData" DefaultLayout="@typeof(Layout.MainLayout)" />
+    </Found>
+    <NotFound>
+        <LayoutView Layout="@typeof(Layout.MainLayout)">
+            <p class="text-center mt-5">Page non trouvée.</p>
+        </LayoutView>
+    </NotFound>
+</Router>

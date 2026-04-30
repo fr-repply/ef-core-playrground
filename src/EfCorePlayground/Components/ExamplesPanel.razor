@@ -1,0 +1,48 @@
+<div class="card flex-grow-1 overflow-auto">
+    <div class="card-header bg-success text-white py-2">
+        <i class="bi bi-lightning me-1"></i> Exemples
+    </div>
+    <div class="list-group list-group-flush">
+        @foreach (var example in examples)
+        {
+            <button class="list-group-item list-group-item-action py-2 small"
+                    @onclick="() => OnExampleSelected.InvokeAsync(example.Code)">
+                <i class="bi bi-play-circle me-1 text-success"></i>
+                @example.Title
+            </button>
+        }
+    </div>
+</div>
+
+@code {
+    [Parameter] public EventCallback<string> OnExampleSelected { get; set; }
+
+    private record Example(string Title, string Code);
+
+    private readonly Example[] examples = new[]
+    {
+        new Example("Lister tous les blogs",
+            "return await db.Blogs.ToListAsync();"),
+
+        new Example("Blogs avec rating ≥ 4",
+            "return await db.Blogs\n    .Where(b => b.Rating >= 4)\n    .OrderByDescending(b => b.Rating)\n    .ToListAsync();"),
+
+        new Example("Posts avec leur auteur",
+            "return await db.Posts\n    .Include(p => p.Author)\n    .Select(p => new { p.Title, Auteur = p.Author.Name, p.PublishedDate })\n    .ToListAsync();"),
+
+        new Example("Nombre de posts par blog",
+            "return await db.Blogs\n    .Select(b => new { Blog = b.Name, NbPosts = b.Posts.Count() })\n    .OrderByDescending(x => x.NbPosts)\n    .ToListAsync();"),
+
+        new Example("Posts avec tags (Many-to-Many)",
+            "return await db.Posts\n    .Include(p => p.Tags)\n    .Select(p => new { p.Title, Tags = string.Join(\", \", p.Tags.Select(t => t.Name)) })\n    .ToListAsync();"),
+
+        new Example("Recherche par mot-clé",
+            "return await db.Posts\n    .Where(p => p.Title.Contains(\"EF Core\"))\n    .Select(p => new { p.Title, p.PublishedDate })\n    .ToListAsync();"),
+
+        new Example("Groupement par auteur",
+            "return await db.Authors\n    .Select(a => new {\n        Auteur = a.Name,\n        NbPosts = a.Posts.Count(),\n        Blogs = string.Join(\", \", a.Posts.Select(p => p.Blog.Name).Distinct())\n    })\n    .ToListAsync();"),
+
+        new Example("Top 5 posts récents",
+            "return await db.Posts\n    .OrderByDescending(p => p.PublishedDate)\n    .Take(5)\n    .Select(p => new { p.Title, p.PublishedDate, Blog = p.Blog.Name })\n    .ToListAsync();"),
+    };
+}

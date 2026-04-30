@@ -1,0 +1,158 @@
+@page "/"
+@using EfCorePlayground.Services
+@inject IJSRuntime JS
+
+<div class="container-fluid h-100 py-2">
+    <div class="row g-2 h-100">
+        @* Left panel: Schema + Examples *@
+        <div class="col-md-3 d-flex flex-column overflow-auto h-100">
+            <SchemaPanel />
+            <ExamplesPanel OnExampleSelected="LoadExample" />
+        </div>
+
+        @* Center panel: Monaco Editor *@
+        <div class="col-md-5 d-flex flex-column h-100">
+            <div class="card flex-grow-1 d-flex flex-column">
+                <div class="card-header bg-dark text-white py-2 d-flex justify-content-between align-items-center">
+                    <span><i class="bi bi-code-slash me-1"></i> Éditeur C# / LINQ</span>
+                    <div>
+                        <button class="btn btn-sm btn-outline-light me-1" @onclick="ResetCode" title="Réinitialiser">
+                            <i class="bi bi-arrow-counterclockwise"></i>
+                        </button>
+                        <button class="btn btn-sm btn-success" @onclick="ExecuteCode" disabled="@isExecuting">
+                            @if (isExecuting)
+                            {
+                                <span class="spinner-border spinner-border-sm me-1"></span>
+                                <span>Exécution...</span>
+                            }
+                            else
+                            {
+                                <i class="bi bi-play-fill me-1"></i>
+                                <span>Exécuter (Ctrl+Enter)</span>
+                            }
+                        </button>
+                    </div>
+                </div>
+                <div class="card-body p-0 flex-grow-1">
+                    <div id="monaco-editor-container" style="height: 100%; width: 100%;"></div>
+                </div>
+                <div class="card-footer bg-light py-1 small text-muted d-flex justify-content-between">
+                    <span>
+                        <i class="bi bi-info-circle me-1"></i>
+                        <code>db</code> = DbContext.
+                        Retournez le résultat avec <code>return</code>.
+                    </span>
+                    @if (executionTimeMs.HasValue)
+                    {
+                        <span>
+                            <i class="bi bi-clock me-1"></i>@executionTimeMs.Value ms
+                        </span>
+                    }
+                </div>
+            </div>
+        </div>
+
+        @* Right panel: Results *@
+        <div class="col-md-4 d-flex flex-column h-100">
+            <ResultsPanel Result="@currentResult" IsExecuting="@isExecuting" />
+        </div>
+    </div>
+</div>
+
+@code {
+    private bool isExecuting;
+    private int? executionTimeMs;
+    private ExecutionResult? currentResult;
+    private DotNetObjectReference<Playground>? dotNetRef;
+    private readonly CodeExecutionService executionService = new();
+
+    private const string DefaultCode = @"// Bienvenue dans le Playground EF Core 10 !
+// Écrivez vos requêtes LINQ ci-dessous.
+// La variable 'db' est votre DbContext avec les tables :
+//   db.Blogs    (BlogId, Name, Url, Rating, CreatedAt)
+//   db.Posts    (PostId, Title, Content, PublishedDate, BlogId, AuthorId)
+//   db.Authors  (AuthorId, Name, Email, Bio)
+//   db.Tags     (TagId, Name)
+//
+// Exemples :
+//   return await db.Blogs.ToListAsync();
+//   return await db.Posts.Where(p => p.BlogId == 1).ToListAsync();
+
+return await db.Blogs.ToListAsync();";
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+        {
+            dotNetRef = DotNetObjectReference.Create(this);
+            await JS.InvokeVoidAsync("monacoInterop.initialize", "monaco-editor-container", DefaultCode, dotNetRef);
+        }
+    }
+
+    [JSInvokable]
+    public async Task OnExecuteFromEditor()
+    {
+        await ExecuteCode();
+    }
+
+    private async Task ExecuteCode()
+    {
+        if (isExecuting) return;
+        isExecuting = true;
+        currentResult = null;
+        executionTimeMs = null;
+        StateHasChanged();
+
+        try
+        {
+            var code = await JS.InvokeAsync<string>("monacoInterop.getValue");
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+            currentResult = await executionService.ExecuteAsync(code);
+            sw.Stop();
+            executionTimeMs = (int)sw.ElapsedMilliseconds;
+
+            // Set or clear editor markers
+            if (currentResult.Success)
+            {
+                await JS.InvokeVoidAsync("monacoInterop.clearMarkers");
+            }
+            else if (currentResult.Errors?.Count > 0)
+            {
+                await JS.InvokeVoidAsync("monacoInterop.setMarkers",
+                    currentResult.Errors.Select(e => new { line = e.Line, column = e.Column, message = e.Message }).ToArray());
+            }
+        }
+        catch (Exception ex)
+        {
+            currentResult = new ExecutionResult
+            {
+                Success = false,
+                Output = $"Erreur : {ex.Message}",
+                Errors = new() { new() { Id = "RUNTIME", Message = ex.Message } }
+            };
+        }
+        finally
+        {
+            isExecuting = false;
+            StateHasChanged();
+        }
+    }
+
+    private async Task LoadExample(string code)
+    {
+        await JS.InvokeVoidAsync("monacoInterop.setValue", code);
+    }
+
+    private async Task ResetCode()
+    {
+        await JS.InvokeVoidAsync("monacoInterop.setValue", DefaultCode);
+        currentResult = null;
+        executionTimeMs = null;
+    }
+
+    public void Dispose()
+    {
+        dotNetRef?.Dispose();
+        executionService.Dispose();
+    }
+}
