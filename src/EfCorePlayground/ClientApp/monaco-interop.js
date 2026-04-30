@@ -57,6 +57,7 @@ window.monacoInterop = {
 
     setMarkers: function (markers) {
         if (window.monacoInterop.editor) {
+            if (!Array.isArray(markers)) markers = [markers];
             var model = window.monacoInterop.editor.getModel();
             monaco.editor.setModelMarkers(model, 'compilation', markers.map(function (m) {
                 return {

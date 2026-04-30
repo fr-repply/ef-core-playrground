@@ -71,6 +71,10 @@ test.describe('EF Core Playground', () => {
     });
 
     test('should show compilation errors for invalid code', async ({ page }) => {
+        // Collect JS errors during this test
+        const jsErrors: string[] = [];
+        page.on('pageerror', (error) => jsErrors.push(error.message));
+
         // Set invalid code
         await page.evaluate(() => {
             (window as any).monacoInterop.setValue('this is not valid C# code!!!');
@@ -79,8 +83,11 @@ test.describe('EF Core Playground', () => {
         // Execute
         await page.getByRole('button', { name: /Exécuter/ }).click();
 
-        // Should show error
+        // Should show error alert
         await expect(page.locator('.alert-danger').first()).toBeVisible({ timeout: 90000 });
+
+        // Verify no JS runtime errors occurred (e.g. e.map is not a function)
+        expect(jsErrors).toEqual([]);
     });
 
     test('should reset code to default', async ({ page }) => {

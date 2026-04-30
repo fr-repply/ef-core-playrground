@@ -118,8 +118,8 @@ return await db.Blogs.ToListAsync();";
             }
             else if (currentResult.Errors?.Count > 0)
             {
-                await JS.InvokeVoidAsync("monacoInterop.setMarkers",
-                    currentResult.Errors.Select(e => new { line = e.Line, column = e.Column, message = e.Message }).ToArray());
+                var markers = currentResult.Errors.Select(e => new { line = e.Line, column = e.Column, message = e.Message }).ToArray();
+                await JS.InvokeVoidAsync("monacoInterop.setMarkers", (object)markers);
             }
         }
         catch (Exception ex)
