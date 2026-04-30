@@ -15,6 +15,29 @@ public static class PgLiteJsRuntime
 }
 
 /// <summary>
+/// Captures SQL queries executed by EF Core through PGlite.
+/// Call <see cref="Start"/> before execution and <see cref="Stop"/> after to collect the SQL.
+/// </summary>
+public static class PgLiteSqlCapture
+{
+    private static List<string>? _captured;
+
+    public static void Start() => _captured = new List<string>();
+
+    public static void Record(string sql)
+    {
+        _captured?.Add(sql);
+    }
+
+    public static List<string> Stop()
+    {
+        var result = _captured ?? new List<string>();
+        _captured = null;
+        return result;
+    }
+}
+
+/// <summary>
 /// Custom DbConnection that routes to PGlite via JavaScript interop.
 /// Open/Close are no-ops that manage state; actual SQL goes through PgLiteDbCommand.
 /// </summary>
@@ -90,6 +113,7 @@ public class PgLiteDbCommand : DbCommand
 
         var sql = _commandText;
         var parameters = ExtractParameters();
+        PgLiteSqlCapture.Record(FormatSqlWithParams(sql, parameters));
 
         try
         {
@@ -134,6 +158,7 @@ public class PgLiteDbCommand : DbCommand
 
         var sql = _commandText;
         var parameters = ExtractParameters();
+        PgLiteSqlCapture.Record(FormatSqlWithParams(sql, parameters));
 
         var result = await js.InvokeAsync<JsonElement>(
             "pgliteInterop.query", cancellationToken, sql, parameters);
@@ -154,6 +179,31 @@ public class PgLiteDbCommand : DbCommand
             if (value == DBNull.Value) value = null;
             if (value is DateTime dt) value = dt.ToString("o");
             result[i] = value;
+        }
+        return result;
+    }
+
+    /// <summary>
+    /// Formats a SQL query with its parameter values substituted for display purposes.
+    /// </summary>
+    private static string FormatSqlWithParams(string sql, object?[] parameters)
+    {
+        if (parameters.Length == 0) return sql;
+
+        var result = sql;
+        // Replace parameters in reverse order to avoid $1 replacing part of $10
+        for (int i = parameters.Length; i >= 1; i--)
+        {
+            var value = parameters[i - 1];
+            var replacement = value switch
+            {
+                null => "NULL",
+                string s => $"'{s.Replace("'", "''")}'",
+                bool b => b ? "TRUE" : "FALSE",
+                DateTime => $"'{value}'",
+                _ => value.ToString() ?? "NULL"
+            };
+            result = result.Replace($"${i}", replacement);
         }
         return result;
     }

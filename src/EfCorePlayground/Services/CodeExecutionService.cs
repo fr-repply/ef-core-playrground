@@ -236,11 +236,17 @@ public class CodeExecutionService
             };
         }
 
+        // Start capturing SQL from user query execution (not schema creation)
+        PgLiteSqlCapture.Start();
+
         var resultTask = (Task<object?>?)method.Invoke(null, new object[] { context });
         var result = resultTask != null ? await resultTask : null;
 
-        // Get the generated SQL if possible
-        string? generatedSql = null;
+        // Collect captured SQL
+        var capturedSql = PgLiteSqlCapture.Stop();
+        string? generatedSql = capturedSql.Count > 0
+            ? string.Join("\n\n", capturedSql)
+            : null;
 
         // Format the result
         var (output, columns, rows) = FormatResult(result);

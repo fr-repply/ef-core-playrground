@@ -54,6 +54,18 @@
         new Example("Top 5 posts récents",
             "return await db.Posts\n    .OrderByDescending(p => p.PublishedDate)\n    .Take(5)\n    .Select(p => new { p.Title, p.PublishedDate, Blog = p.Blog.Name })\n    .ToListAsync();"),
 
+        new Example("✏️ INSERT : Ajouter un blog",
+            "// Ajouter un nouveau blog en base\nvar newBlog = new Blog\n{\n    Name = \"Mon Nouveau Blog\",\n    Url = \"https://mon-blog.example.com\",\n    Rating = 5,\n    CreatedAt = DateTime.UtcNow\n};\ndb.Blogs.Add(newBlog);\nawait db.SaveChangesAsync();\n\n// Vérifier l'insertion\nreturn await db.Blogs\n    .OrderByDescending(b => b.BlogId)\n    .Select(b => new { b.BlogId, b.Name, b.Url, b.Rating })\n    .ToListAsync();"),
+
+        new Example("✏️ UPDATE : Modifier un blog",
+            "// Modifier le rating d'un blog existant\nvar blog = await db.Blogs.FirstAsync(b => b.Name == \"Web Dev Tips\");\nblog.Rating = 5;\nblog.Name = \"Web Dev Tips (Mis à jour)\";\nawait db.SaveChangesAsync();\n\n// Vérifier la modification\nreturn await db.Blogs\n    .Select(b => new { b.BlogId, b.Name, b.Rating })\n    .ToListAsync();"),
+
+        new Example("✏️ DELETE : Supprimer un blog",
+            "// Supprimer un blog (et ses posts en cascade)\nvar blog = await db.Blogs\n    .Include(b => b.Posts)\n    .FirstAsync(b => b.Name == \"Web Dev Tips\");\ndb.Blogs.Remove(blog);\nawait db.SaveChangesAsync();\n\n// Vérifier la suppression\nreturn await db.Blogs\n    .Select(b => new { b.BlogId, b.Name })\n    .ToListAsync();"),
+
+        new Example("✏️ INSERT multiple + Transaction",
+            "// Insérer plusieurs entités en une transaction\nvar author = new Author\n{\n    Name = \"Nouvel Auteur\",\n    Email = \"nouveau@example.com\",\n    Bio = \"Développeur passionné\"\n};\n\nvar blog = new Blog\n{\n    Name = \"Blog Fresh\",\n    Url = \"https://fresh.example.com\",\n    Rating = 4,\n    CreatedAt = DateTime.UtcNow\n};\n\ndb.Authors.Add(author);\ndb.Blogs.Add(blog);\nawait db.SaveChangesAsync();\n\n// Ajouter un post lié\nvar post = new Post\n{\n    Title = \"Premier article\",\n    Content = \"Contenu du premier article...\",\n    PublishedDate = DateTime.UtcNow,\n    Blog = blog,\n    Author = author\n};\ndb.Posts.Add(post);\nawait db.SaveChangesAsync();\n\nreturn await db.Posts\n    .Where(p => p.Author.Name == \"Nouvel Auteur\")\n    .Select(p => new { p.Title, Blog = p.Blog.Name, Auteur = p.Author.Name })\n    .ToListAsync();"),
+
         new Example("⚡ Projectable: Blogs populaires",
             "// Utilise la propriété [Projectable] IsPopular\n// traduite automatiquement en SQL\nreturn await db.Blogs\n    .Where(b => b.IsPopular)\n    .Select(b => new { b.Name, b.Rating, b.PostCount })\n    .ToListAsync();"),
 

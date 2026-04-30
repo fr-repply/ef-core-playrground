@@ -135,5 +135,124 @@ window.monacoInterop = {
             var model = window.monacoInterop.editor.getModel();
             monaco.editor.setModelMarkers(model, 'compilation', []);
         }
+    },
+
+    /**
+     * Creates (or updates) a read-only Monaco editor for SQL display.
+     * Reuses the same instance if the container already has an editor.
+     */
+    createSqlViewer: function (elementId, sql) {
+        var container = document.getElementById(elementId);
+        if (!container) return;
+
+        // Register SQL language if not already done
+        if (!window.monacoInterop._sqlLangRegistered) {
+            window.require(['vs/editor/editor.main'], function () {
+                window.monacoInterop._initSqlViewer(container, sql);
+            });
+        } else {
+            window.monacoInterop._initSqlViewer(container, sql);
+        }
+    },
+
+    _sqlEditor: null,
+    _sqlLangRegistered: false,
+
+    _initSqlViewer: function (container, sql) {
+        if (!window.monacoInterop._sqlLangRegistered) {
+            // Register a basic SQL language with syntax highlighting
+            monaco.languages.register({ id: 'sql' });
+            monaco.languages.setMonarchTokensProvider('sql', {
+                ignoreCase: true,
+                keywords: [
+                    'SELECT', 'FROM', 'WHERE', 'AND', 'OR', 'NOT', 'IN', 'EXISTS',
+                    'INSERT', 'INTO', 'VALUES', 'UPDATE', 'SET', 'DELETE',
+                    'CREATE', 'TABLE', 'ALTER', 'DROP', 'INDEX', 'VIEW',
+                    'JOIN', 'INNER', 'LEFT', 'RIGHT', 'OUTER', 'CROSS', 'LATERAL',
+                    'ON', 'AS', 'IS', 'NULL', 'TRUE', 'FALSE',
+                    'ORDER', 'BY', 'ASC', 'DESC', 'GROUP', 'HAVING',
+                    'LIMIT', 'OFFSET', 'DISTINCT', 'ALL', 'UNION', 'EXCEPT', 'INTERSECT',
+                    'CASE', 'WHEN', 'THEN', 'ELSE', 'END',
+                    'COUNT', 'SUM', 'AVG', 'MIN', 'MAX',
+                    'LIKE', 'BETWEEN', 'CAST', 'COALESCE',
+                    'PRIMARY', 'KEY', 'FOREIGN', 'REFERENCES', 'CONSTRAINT',
+                    'IF', 'RETURNING', 'WITH', 'RECURSIVE', 'OVER', 'PARTITION',
+                    'ROW_NUMBER', 'RANK', 'DENSE_RANK', 'LAG', 'LEAD',
+                    'SUBQUERY', 'ANY', 'SOME', 'APPLY', 'FETCH', 'NEXT', 'ROWS', 'ONLY',
+                    'TAKE', 'SKIP', 'TOP', 'PERCENT', 'TIES'
+                ],
+                typeKeywords: [
+                    'integer', 'int', 'bigint', 'smallint', 'text', 'varchar',
+                    'boolean', 'bool', 'timestamp', 'date', 'time', 'numeric',
+                    'decimal', 'real', 'double', 'precision', 'serial', 'uuid',
+                    'character', 'varying', 'bytea', 'json', 'jsonb'
+                ],
+                operators: ['=', '>', '<', '>=', '<=', '<>', '!=', '||', '::', '+', '-', '*', '/'],
+                tokenizer: {
+                    root: [
+                        [/--.*$/, 'comment'],
+                        [/\/\*/, 'comment', '@comment'],
+                        [/'[^']*'/, 'string'],
+                        [/\$\d+/, 'variable'],
+                        [/"[^"]*"/, 'identifier'],
+                        [/\d+(\.\d+)?/, 'number'],
+                        [/[a-zA-Z_]\w*/, {
+                            cases: {
+                                '@keywords': 'keyword',
+                                '@typeKeywords': 'type',
+                                '@default': 'identifier'
+                            }
+                        }],
+                        [/[=><:!|+\-*/]/, 'operator'],
+                        [/[,;.()\[\]]/, 'delimiter']
+                    ],
+                    comment: [
+                        [/\*\//, 'comment', '@pop'],
+                        [/./, 'comment']
+                    ]
+                }
+            });
+            window.monacoInterop._sqlLangRegistered = true;
+        }
+
+        if (window.monacoInterop._sqlEditor) {
+            // Reuse existing editor — just update value
+            window.monacoInterop._sqlEditor.setValue(sql);
+            return;
+        }
+
+        window.monacoInterop._sqlEditor = monaco.editor.create(container, {
+            value: sql,
+            language: 'sql',
+            theme: 'vs-dark',
+            fontSize: 12,
+            fontFamily: "'Cascadia Code', 'Fira Code', Consolas, 'Courier New', monospace",
+            minimap: { enabled: false },
+            automaticLayout: true,
+            scrollBeyondLastLine: false,
+            readOnly: true,
+            lineNumbers: 'off',
+            renderLineHighlight: 'none',
+            padding: { top: 6, bottom: 6 },
+            wordWrap: 'on',
+            domReadOnly: true,
+            contextmenu: false,
+            scrollbar: { vertical: 'auto', horizontal: 'auto' },
+            overviewRulerLanes: 0,
+            hideCursorInOverviewRuler: true,
+            overviewRulerBorder: false,
+            folding: false,
+            glyphMargin: false
+        });
+    },
+
+    /**
+     * Disposes the SQL viewer editor instance.
+     */
+    disposeSqlViewer: function () {
+        if (window.monacoInterop._sqlEditor) {
+            window.monacoInterop._sqlEditor.dispose();
+            window.monacoInterop._sqlEditor = null;
+        }
     }
 };
