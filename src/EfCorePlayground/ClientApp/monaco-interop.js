@@ -1,12 +1,16 @@
-// Monaco Editor JS interop
+// Monaco Editor JS interop — loaded via Vite bundle
+// Monaco AMD loader is served from vendor/monaco/min/vs/loader.js (copied by vite-plugin-static-copy)
 window.monacoInterop = {
     editor: null,
 
     initialize: function (elementId, defaultCode, dotNetRef) {
-        require.config({ paths: { 'vs': 'https://cdn.jsdelivr.net/npm/monaco-editor@0.52.2/min/vs' } });
+        // Determine the base path for Monaco files (works with <base href="/...">)
+        var base = document.querySelector('base')?.getAttribute('href') || '/';
+        if (!base.endsWith('/')) base += '/';
+
+        require.config({ paths: { 'vs': base + 'vendor/monaco/min/vs' } });
 
         require(['vs/editor/editor.main'], function () {
-            // Register C# language configuration
             monaco.languages.register({ id: 'csharp' });
 
             window.monacoInterop.editor = monaco.editor.create(document.getElementById(elementId), {
@@ -21,10 +25,7 @@ window.monacoInterop = {
                 lineNumbers: 'on',
                 roundedSelection: true,
                 padding: { top: 10 },
-                suggest: {
-                    showKeywords: true,
-                    showSnippets: true
-                },
+                suggest: { showKeywords: true, showSnippets: true },
                 tabSize: 4,
                 wordWrap: 'on'
             });

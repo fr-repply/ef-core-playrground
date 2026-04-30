@@ -16,4 +16,21 @@
     <PackageReference Include="System.Reflection.Metadata" Version="10.0.7" />
   </ItemGroup>
 
+  <!-- Run Vite build before .NET build -->
+  <Target Name="NpmInstall" BeforeTargets="ViteBuild" Condition="!Exists('node_modules')">
+    <Exec Command="npm ci" WorkingDirectory="$(MSBuildProjectDirectory)" />
+  </Target>
+
+  <Target Name="ViteBuild" BeforeTargets="Build">
+    <Exec Command="npm run build" WorkingDirectory="$(MSBuildProjectDirectory)" />
+  </Target>
+
+  <!-- Exclude node_modules and ClientApp from publish -->
+  <ItemGroup>
+    <Content Remove="node_modules\**" />
+    <None Remove="node_modules\**" />
+    <Content Remove="ClientApp\**" />
+    <None Remove="ClientApp\**" />
+  </ItemGroup>
+
 </Project>

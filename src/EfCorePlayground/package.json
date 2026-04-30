@@ -1,0 +1,22 @@
+{
+  "name": "efcoreplayground",
+  "version": "1.0.0",
+  "main": "index.js",
+  "scripts": {
+    "build": "vite build",
+    "dev": "vite build --watch"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "description": "",
+  "dependencies": {
+    "bootstrap": "^5.3.8",
+    "bootstrap-icons": "^1.13.1",
+    "monaco-editor": "^0.55.1"
+  },
+  "devDependencies": {
+    "vite": "^8.0.10",
+    "vite-plugin-static-copy": "^3.4.0"
+  }
+}

@@ -16,9 +16,10 @@ Un environnement interactif de type REPL pour **Entity Framework Core 10**, enti
 ## 🚀 Démarrage rapide
 
 ```bash
-# Prérequis : .NET 10 SDK
+# Prérequis : .NET 10 SDK + Node.js 18+
 cd src/EfCorePlayground
-dotnet run
+npm install     # Monaco Editor, Bootstrap (via Vite)
+dotnet run      # Build Vite + serveur Blazor
 # Ouvrir http://localhost:5000
 ```
 

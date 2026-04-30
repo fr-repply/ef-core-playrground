@@ -29,20 +29,24 @@ Ce playground est un environnement interactif de type REPL pour **Entity Framewo
 - **Blazor WebAssembly** (.NET 10) — Runtime .NET dans le navigateur
 - **Roslyn** (Microsoft.CodeAnalysis.CSharp) — Compilation C# dynamique in-browser
 - **EF Core 10 + SQLite** — ORM + base de données en mémoire (WASM)
-- **Monaco Editor** — Éditeur de code riche (même éditeur que VS Code)
-- **Bootstrap 5** — Framework CSS pour l'interface utilisateur
+- **Monaco Editor** (via npm) — Éditeur de code riche (même éditeur que VS Code)
+- **Bootstrap 5** (via npm) — Framework CSS pour l'interface utilisateur
+- **Vite** — Bundler pour les assets frontend (Monaco, Bootstrap, JS interop)
+
+> **Aucun CDN n'est utilisé** — tous les assets sont servis localement via Vite.
 
 ## 🚀 Démarrage rapide
 
 ### Prérequis
 - [.NET 10 SDK](https://dotnet.microsoft.com/download/dotnet/10.0)
-- [Node.js 18+](https://nodejs.org/) (pour les tests Playwright)
+- [Node.js 18+](https://nodejs.org/) (pour Vite et les tests Playwright)
 
 ### Lancer le playground en local
 
 ```bash
 cd src/EfCorePlayground
-dotnet run
+npm install     # Installe Monaco, Bootstrap, Vite
+dotnet run      # Vite build automatique + serveur Blazor
 ```
 
 Ouvrir http://localhost:5000 dans le navigateur.
@@ -59,7 +63,11 @@ npx playwright test
 ## 📐 Structure du projet
 
 ```
+├── EfCorePlayground.sln         # Solution .NET
 ├── src/EfCorePlayground/
+│   ├── ClientApp/               # Sources frontend (bundlés par Vite)
+│   │   ├── main.js              # Point d'entrée Vite (imports CSS + JS)
+│   │   └── monaco-interop.js    # Interop JS pour Monaco Editor
 │   ├── Components/              # Composants Blazor réutilisables
 │   │   ├── SchemaPanel.razor    # Affichage du schéma de la BDD
 │   │   ├── ExamplesPanel.razor  # Liste d'exemples cliquables
@@ -78,10 +86,12 @@ npx playwright test
 │   │   └── CodeExecutionService.cs # Service de compilation/exécution Roslyn
 │   ├── wwwroot/
 │   │   ├── css/app.css          # Styles personnalisés
-│   │   ├── js/monaco-interop.js # Interop JS pour Monaco Editor
+│   │   ├── vendor/              # Sortie Vite (généré, gitignored)
 │   │   └── index.html           # Page hôte
+│   ├── vite.config.js           # Configuration Vite
+│   ├── package.json             # Dépendances npm (Monaco, Bootstrap, Vite)
 │   ├── Program.cs               # Point d'entrée Blazor WASM
-│   └── EfCorePlayground.csproj  # Fichier projet .NET
+│   └── EfCorePlayground.csproj  # Fichier projet .NET (intègre Vite build)
 ├── tests/e2e/
 │   ├── tests/playground.spec.ts # Tests Playwright E2E
 │   └── playwright.config.ts     # Configuration Playwright
@@ -172,6 +182,7 @@ Le projet se déploie comme un site statique :
 
 ```bash
 cd src/EfCorePlayground
+npm ci
 dotnet publish -c Release -o ../../dist
 
 # Les fichiers statiques sont dans dist/wwwroot/
@@ -208,6 +219,10 @@ jobs:
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '10.0.x'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - run: cd src/EfCorePlayground && npm ci
       - run: dotnet publish src/EfCorePlayground -c Release -o dist
       - run: cp dist/wwwroot/index.html dist/wwwroot/404.html
       - uses: actions/upload-pages-artifact@v3
