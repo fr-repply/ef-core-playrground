@@ -21,5 +21,5 @@ public class Post
     public int TagCount => Tags.Count;
 
     [Projectable]
-    public bool IsRecent => PublishedDate >= new DateTime(2024, 1, 1);
+    public bool IsRecent => PublishedDate >= new DateTime(2024, 1, 1, 0, 0, 0, DateTimeKind.Utc);
 }

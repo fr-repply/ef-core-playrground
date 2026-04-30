@@ -140,6 +140,8 @@ public class CodeExecutionService
         _ = typeof(System.ComponentModel.TypeConverter);
         _ = typeof(System.ComponentModel.DataAnnotations.RequiredAttribute);
         _ = typeof(EntityFrameworkCore.Projectables.ProjectableAttribute);
+        // Force-load System.Linq.Queryable (needed for IQueryable Select/Where/etc.)
+        _ = typeof(System.Linq.Queryable);
 
         // Explicitly load assemblies by name that WASM might not resolve via typeof alone
         foreach (var name in new[]
@@ -148,6 +150,7 @@ public class CodeExecutionService
             "System.ComponentModel.Primitives",
             "System.ComponentModel.Annotations",
             "EntityFrameworkCore.Projectables.Abstractions",
+            "System.Linq.Queryable",
         })
         {
             try { Assembly.Load(name); } catch { }
@@ -200,13 +203,13 @@ public class CodeExecutionService
         // Initialize a fresh PGlite instance for each execution
         await _jsRuntime.InvokeVoidAsync("pgliteInterop.init");
 
-        var commandInterceptor = new PgLiteCommandInterceptor(_jsRuntime);
-        var connectionInterceptor = new PgLiteConnectionInterceptor();
+        // Make JS runtime available to PgLiteDbCommand
+        PgLiteJsRuntime.Instance = _jsRuntime;
 
         var options = new DbContextOptionsBuilder<PlaygroundDbContext>()
             .UseNpgsql("Host=pglite;Database=playground")
+            .ReplaceService<IRelationalConnection, PgLiteRelationalConnection>()
             .ReplaceService<IRelationalDatabaseCreator, PgLiteDatabaseCreator>()
-            .AddInterceptors(connectionInterceptor, commandInterceptor)
             .Options;
 
         await using var context = new PlaygroundDbContext(options);

@@ -136,6 +136,9 @@ test.describe('EF Core Playground - Groupement par auteur', () => {
     test('should execute groupement par auteur without APPLY error', async ({ page }) => {
         test.slow();
 
+        // Collapse schema panel to make room for examples list
+        await page.getByText('Schéma').click();
+
         // Click the example
         await page.getByRole('button', { name: 'Groupement par auteur' }).click();
 
@@ -143,7 +146,7 @@ test.describe('EF Core Playground - Groupement par auteur', () => {
         const editorValue = await page.evaluate(() => {
             return (window as any).monacoInterop.getValue();
         });
-        expect(editorValue).toContain('Blogs = string.Join');
+        expect(editorValue).toContain('NbBlogs');
 
         // Execute
         await page.getByRole('button', { name: /Exécuter/ }).click();
@@ -169,6 +172,8 @@ test.describe('EF Core Playground - Projectables', () => {
     });
 
     test('should display Projectables examples in the panel', async ({ page }) => {
+        // Collapse schema to see all examples
+        await page.getByText('Schéma').click();
         await expect(page.getByRole('button', { name: /Projectable: Blogs populaires/ })).toBeVisible();
         await expect(page.getByRole('button', { name: /Projectable: Auteurs productifs/ })).toBeVisible();
         await expect(page.getByRole('button', { name: /Projectable: Posts récents/ })).toBeVisible();
@@ -184,6 +189,9 @@ test.describe('EF Core Playground - Projectables', () => {
 
     test('should execute Projectable: Blogs populaires', async ({ page }) => {
         test.slow();
+
+        // Collapse schema to make room for examples
+        await page.getByText('Schéma').click();
 
         // Click the example
         await page.getByRole('button', { name: /Projectable: Blogs populaires/ }).click();
@@ -213,6 +221,9 @@ test.describe('EF Core Playground - Projectables', () => {
     test('should execute Projectable: Auteurs productifs', async ({ page }) => {
         test.slow();
 
+        // Collapse schema to make room for examples
+        await page.getByText('Schéma').click();
+
         // Click the example
         await page.getByRole('button', { name: /Projectable: Auteurs productifs/ }).click();
 
@@ -239,6 +250,9 @@ test.describe('EF Core Playground - Projectables', () => {
 
     test('should execute Projectable: Posts récents avec tags', async ({ page }) => {
         test.slow();
+
+        // Collapse schema to make room for examples
+        await page.getByText('Schéma').click();
 
         // Click the example
         await page.getByRole('button', { name: /Projectable: Posts récents/ }).click();

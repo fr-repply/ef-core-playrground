@@ -12,12 +12,17 @@ window.pgliteInterop = {
             db = null;
         }
 
-        if (!PGliteModule) {
-            PGliteModule = await import('@electric-sql/pglite');
-        }
+        try {
+            if (!PGliteModule) {
+                PGliteModule = await import('@electric-sql/pglite');
+            }
 
-        db = new PGliteModule.PGlite();
-        await db.waitReady;
+            db = new PGliteModule.PGlite();
+            await db.waitReady;
+        } catch (e) {
+            db = null;
+            throw new Error('PGlite initialization failed: ' + e.message);
+        }
     },
 
     /**

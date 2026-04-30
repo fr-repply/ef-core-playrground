@@ -20,9 +20,10 @@ window.monacoInterop = {
         var base = document.querySelector('base')?.getAttribute('href') || '/';
         if (!base.endsWith('/')) base += '/';
 
-        require.config({ paths: { 'vs': base + 'vendor/monaco/min/vs' } });
+        // Use window.require (from Monaco AMD loader) since this runs as an ES module
+        window.require.config({ paths: { 'vs': base + 'vendor/monaco/min/vs' } });
 
-        require(['vs/editor/editor.main'], function () {
+        window.require(['vs/editor/editor.main'], function () {
             monaco.languages.register({ id: 'csharp' });
 
             window.monacoInterop.editor = monaco.editor.create(document.getElementById(elementId), {
