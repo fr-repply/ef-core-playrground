@@ -7,7 +7,7 @@ html, body {
     background: #f5f5f5;
 }
 
-#vue-app {
+#app {
     height: 100vh;
     display: flex;
     flex-direction: column;
