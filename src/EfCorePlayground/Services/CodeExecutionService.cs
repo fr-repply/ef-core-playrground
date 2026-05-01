@@ -1,8 +1,6 @@
 using System.Collections;
 using System.Reflection;
 using System.Reflection.Metadata;
-using System.Runtime.InteropServices;
-using System.Text;
 using System.Text.Json;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
@@ -23,25 +21,23 @@ public class CodeExecutionService
     };
 
     private readonly IJSRuntime _jsRuntime;
+    private readonly HttpClient _http;
+    private byte[]? _generatorDllCache;
 
-    public CodeExecutionService(IJSRuntime jsRuntime)
+    public CodeExecutionService(IJSRuntime jsRuntime, HttpClient http)
     {
         _jsRuntime = jsRuntime;
+        _http = http;
     }
 
-    /// <summary>
-    /// Number of boilerplate lines before user code in the full template.
-    /// </summary>
+    /// <summary>Number of boilerplate lines before user code in the full template.</summary>
     public const int PrefixLineCount = 14;
 
-    /// <summary>
-    /// Number of boilerplate lines after user code in the full template.
-    /// </summary>
+    /// <summary>Number of boilerplate lines after user code in the full template.</summary>
     public const int SuffixLineCount = 3;
 
     /// <summary>
-    /// Wraps a body code snippet (e.g. "return await db.Blogs.ToListAsync();")
-    /// into the full compilable template shown in the editor.
+    /// Wraps a body code snippet into the full compilable template shown in the editor.
     /// </summary>
     public static string BuildFullCode(string bodyCode)
     {
@@ -74,6 +70,10 @@ public class CodeExecutionService
         try
         {
             var compilation = CreateCompilation(fullCode);
+
+            // Run the official Projectables source generator on user code when needed
+            if (fullCode.Contains("[Projectable]") || fullCode.Contains("[Projectable("))
+                compilation = await RunProjectablesGeneratorAsync(compilation);
 
             using var ms = new MemoryStream();
             var emitResult = compilation.Emit(ms);
@@ -121,26 +121,82 @@ public class CodeExecutionService
     private CSharpCompilation CreateCompilation(string code)
     {
         var syntaxTree = CSharpSyntaxTree.ParseText(code);
-
         var references = GetMetadataReferences();
 
-        var compilation = CSharpCompilation.Create(
+        return CSharpCompilation.Create(
             "UserCodeAssembly",
             new[] { syntaxTree },
             references,
             new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary)
                 .WithOptimizationLevel(OptimizationLevel.Release)
                 .WithPlatform(Platform.AnyCpu));
+    }
 
-        // Run our lightweight Projectables source generator for user-defined [Projectable] members
-        var generatedTrees = ProjectableCodeGenerator.GenerateProjectableSources(compilation);
-        if (generatedTrees.Count > 0)
+    // ──────────────────────────────────────────────────────────────────
+    //  Run the official Projectables source generator at runtime
+    // ──────────────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Fetches <c>EntityFrameworkCore.Projectables.Generator.dll</c> from <c>wwwroot/bin/</c>,
+    /// loads <c>ProjectionExpressionGenerator</c> and runs it via
+    /// <see cref="CSharpGeneratorDriver"/> so the companion expression classes are compiled
+    /// into the user assembly — exactly as the build-time source generator would do.
+    /// </summary>
+    private async Task<CSharpCompilation> RunProjectablesGeneratorAsync(CSharpCompilation compilation)
+    {
+        try
         {
-            compilation = compilation.AddSyntaxTrees(generatedTrees);
+            _generatorDllCache ??= await _http.GetByteArrayAsync("bin/EntityFrameworkCore.Projectables.Generator.dll");
+            var genAssembly = Assembly.Load(_generatorDllCache);
+
+            var genType = genAssembly.GetType("EntityFrameworkCore.Projectables.ProjectionExpressionGenerator")
+                          ?? genAssembly.GetTypes().FirstOrDefault(t => t.Name == "ProjectionExpressionGenerator");
+
+            if (genType == null)
+            {
+                Console.Error.WriteLine("[Projectables] ProjectionExpressionGenerator type not found in generator DLL.");
+                return compilation;
+            }
+
+            var instance = Activator.CreateInstance(genType);
+
+            if (instance is IIncrementalGenerator incrementalGen)
+            {
+                var driver = CSharpGeneratorDriver.Create(incrementalGen);
+                driver.RunGeneratorsAndUpdateCompilation(compilation, out var updated, out var genDiags);
+
+                foreach (var d in genDiags.Where(d => d.Severity == DiagnosticSeverity.Error))
+                    Console.Error.WriteLine($"[Projectables generator] {d.GetMessage()}");
+
+                return (CSharpCompilation)updated;
+            }
+
+#pragma warning disable CS0618
+            if (instance is ISourceGenerator sourceGen)
+            {
+                var driver = CSharpGeneratorDriver.Create(sourceGen);
+                driver.RunGeneratorsAndUpdateCompilation(compilation, out var updated, out var genDiags);
+
+                foreach (var d in genDiags.Where(d => d.Severity == DiagnosticSeverity.Error))
+                    Console.Error.WriteLine($"[Projectables generator] {d.GetMessage()}");
+
+                return (CSharpCompilation)updated;
+            }
+#pragma warning restore CS0618
+
+            Console.Error.WriteLine($"[Projectables] Generator type '{genType.FullName}' does not implement IIncrementalGenerator or ISourceGenerator.");
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"[Projectables] Failed to run generator: {ex.Message}");
         }
 
         return compilation;
     }
+
+    // ──────────────────────────────────────────────────────────────────
+    //  Metadata references
+    // ──────────────────────────────────────────────────────────────────
 
     private List<MetadataReference> GetMetadataReferences()
     {
@@ -174,7 +230,6 @@ public class CodeExecutionService
         {
             try
             {
-                // Try to get raw metadata (works in .NET 9+)
                 unsafe
                 {
                     if (assembly.TryGetRawMetadata(out byte* blob, out int length))
@@ -206,6 +261,10 @@ public class CodeExecutionService
 
         return references;
     }
+
+    // ──────────────────────────────────────────────────────────────────
+    //  Code execution helpers
+    // ──────────────────────────────────────────────────────────────────
 
     private async Task<ExecutionResult> RunCompiledCode(Assembly assembly)
     {
@@ -294,8 +353,9 @@ public class CodeExecutionService
                     var value = prop.GetValue(item);
                     // Avoid serializing navigation properties (circular refs)
                     if (value is IEnumerable && value is not string && value is not Array)
-                        row[prop.Name] = $"[Collection]";
-                    else if (value != null && !value.GetType().IsPrimitive && value is not string && value is not DateTime && value is not decimal && !value.GetType().IsEnum)
+                        row[prop.Name] = "[Collection]";
+                    else if (value != null && !value.GetType().IsPrimitive && value is not string
+                             && value is not DateTime && value is not decimal && !value.GetType().IsEnum)
                         row[prop.Name] = value.ToString();
                     else
                         row[prop.Name] = value;
@@ -303,8 +363,7 @@ public class CodeExecutionService
                 rows.Add(row);
             }
 
-            var output = $"{items.Count} result(s)";
-            return (output, columns, rows);
+            return ($"{items.Count} result(s)", columns, rows);
         }
 
         // Single value

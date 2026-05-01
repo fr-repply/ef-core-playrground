@@ -2,6 +2,7 @@
 @using EfCorePlayground.Services
 @inject IJSRuntime JS
 @inject NavigationManager Nav
+@inject HttpClient Http
 
 <div class="container-fluid h-100 py-2">
     <div class="row g-2 h-100">
@@ -95,7 +96,7 @@
     {
         if (firstRender)
         {
-            executionService = new CodeExecutionService(JS);
+            executionService = new CodeExecutionService(JS, Http);
             dotNetRef = DotNetObjectReference.Create(this);
 
             // Check if code is passed via URL

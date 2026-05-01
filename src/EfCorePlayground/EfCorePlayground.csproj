@@ -11,9 +11,10 @@
 
   <ItemGroup>
     <PackageReference Include="EntityFrameworkCore.Projectables" Version="6.0.3" />
+    <PackageReference Include="EntityFrameworkCore.Projectables.Abstractions" Version="6.0.3" GeneratePathProperty="true" />
     <PackageReference Include="Microsoft.AspNetCore.Components.WebAssembly" Version="10.0.5" />
     <PackageReference Include="Microsoft.AspNetCore.Components.WebAssembly.DevServer" Version="10.0.5" PrivateAssets="all" />
-    <PackageReference Include="Microsoft.CodeAnalysis.CSharp" Version="4.13.0" />
+    <PackageReference Include="Microsoft.CodeAnalysis.CSharp" Version="5.0.0" />
     <PackageReference Include="Microsoft.EntityFrameworkCore.Sqlite" Version="10.0.5" />
     <PackageReference Include="Npgsql.EntityFrameworkCore.PostgreSQL" Version="10.0.1" />
     <PackageReference Include="System.Reflection.Metadata" Version="10.0.7" />
@@ -26,6 +27,15 @@
 
   <Target Name="ViteBuild" BeforeTargets="Build">
     <Exec Command="npm run build" WorkingDirectory="$(MSBuildProjectDirectory)" />
+  </Target>
+
+  <!-- Copy the Projectables source generator to wwwroot so it can be loaded at runtime in WASM -->
+  <Target Name="CopyProjectablesGenerator" BeforeTargets="Build">
+    <MakeDir Directories="$(MSBuildProjectDirectory)\wwwroot\bin" />
+    <Copy
+      SourceFiles="$(PkgEntityFrameworkCore_Projectables_Abstractions)\analyzers\dotnet\cs\EntityFrameworkCore.Projectables.Generator.dll"
+      DestinationFolder="$(MSBuildProjectDirectory)\wwwroot\bin"
+      SkipUnchangedFiles="true" />
   </Target>
 
   <!-- Exclude node_modules and ClientApp from publish -->
