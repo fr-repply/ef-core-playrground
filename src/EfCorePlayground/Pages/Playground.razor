@@ -1,6 +1,5 @@
 @page "/"
 @using EfCorePlayground.Services
-@using EfCorePlayground.Models
 @inject IJSRuntime JS
 @inject NavigationManager Nav
 @inject HttpClient Http
@@ -103,10 +102,9 @@
             // Restore previously compiled assemblies from localStorage (fast, no Roslyn involved)
             await executionService.LoadCacheFromStorageAsync();
 
-            // Pre-warm all examples in the background so first execution is instant
-            _ = executionService.WarmUpAsync(
-                ExampleSnippets.All.Select(e =>
-                    e.IsFullCode ? e.Code : CodeExecutionService.BuildFullCode(e.Code)));
+            // Warm up Roslyn in the background: JIT-initialise its internals and pre-load all
+            // metadata references so the first real compilation is significantly faster.
+            executionService.WarmUpRoslynBackground();
 
             // Check if code is passed via URL
             var uri = new Uri(Nav.Uri);

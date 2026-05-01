@@ -38,6 +38,24 @@
       SkipUnchangedFiles="true" />
   </Target>
 
+  <!--
+    Pre-compile all example snippets at build time and store the resulting DLLs as static assets
+    under wwwroot/precompiled/{sha256-hash}.dll.  The WASM runtime fetches these via HTTP instead
+    of running Roslyn on first use.
+  -->
+  <Target Name="PrecompileExamples" AfterTargets="Build">
+    <PropertyGroup>
+      <PrecompilerProject>$(MSBuildThisFileDirectory)..\..\tools\EfCorePlayground.Precompiler\EfCorePlayground.Precompiler.csproj</PrecompilerProject>
+      <PrecompiledOutputDir>$(MSBuildProjectDirectory)\wwwroot\precompiled</PrecompiledOutputDir>
+      <ProjectablesGeneratorDll>$(PkgEntityFrameworkCore_Projectables_Abstractions)\analyzers\dotnet\cs\EntityFrameworkCore.Projectables.Generator.dll</ProjectablesGeneratorDll>
+    </PropertyGroup>
+    <MakeDir Directories="$(PrecompiledOutputDir)" />
+    <Exec
+      Command="dotnet run --project &quot;$(PrecompilerProject)&quot; -- &quot;$(OutputPath)EfCorePlayground.dll&quot; &quot;$(PrecompiledOutputDir)&quot; &quot;$(ProjectablesGeneratorDll)&quot;"
+      WorkingDirectory="$(MSBuildProjectDirectory)"
+      ContinueOnError="true" />
+  </Target>
+
   <!-- Exclude node_modules and ClientApp from publish -->
   <ItemGroup>
     <Content Remove="node_modules\**" />

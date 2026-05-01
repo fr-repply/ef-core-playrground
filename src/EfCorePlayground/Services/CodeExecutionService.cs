@@ -83,6 +83,20 @@ public class CodeExecutionService
         return Convert.ToHexString(bytes);
     }
 
+    /// <summary>
+    /// Triggers a background trivial compilation to JIT-initialise Roslyn internals and
+    /// pre-load all metadata references. The result is discarded — this is a pure warm-up.
+    /// Fire-and-forget: call without await.
+    /// </summary>
+    public void WarmUpRoslynBackground()
+    {
+        _ = Task.Run(() =>
+        {
+            try { CreateCompilation(BuildFullCode("return null;")).Emit(Stream.Null); }
+            catch { /* best-effort */ }
+        });
+    }
+
     /// <summary>Clears the in-memory and persistent (localStorage) cache.</summary>
     public async Task ClearCacheAsync()
     {
@@ -115,37 +129,24 @@ public class CodeExecutionService
     }
 
     /// <summary>
-    /// Pre-compiles the provided snippets in background so they are ready for instant execution.
-    /// Already-cached snippets are skipped. Designed to be fire-and-forget.
+    /// Tries to fetch a pre-compiled assembly DLL from <c>wwwroot/precompiled/{hash}.dll</c>.
+    /// Returns <c>null</c> silently on any error or 404 (e.g. user-written code has no static asset).
     /// </summary>
-    public async Task WarmUpAsync(IEnumerable<string> fullCodeSnippets)
+    private async Task<byte[]?> TryLoadFromStaticFileAsync(string hash)
     {
-        foreach (var code in fullCodeSnippets)
+        try
         {
-            var cacheKey = ComputeCodeHash(code);
-            if (_compilationCache.ContainsKey(cacheKey)) continue;
+            var response = await _http.GetAsync(
+                $"precompiled/{hash}.dll",
+                HttpCompletionOption.ResponseHeadersRead);
 
-            try
-            {
-                var compilation = CreateCompilation(code);
-                if (code.Contains("[Projectable]") || code.Contains("[Projectable("))
-                    compilation = await RunProjectablesGeneratorAsync(compilation);
-
-                using var ms = new MemoryStream();
-                var emitResult = compilation.Emit(ms);
-                if (!emitResult.Success) continue;
-
-                var bytes = ms.ToArray();
-                _compilationCache[cacheKey] = bytes;
-                await SaveToStorageAsync(cacheKey, bytes);
-            }
-            catch (Exception ex)
-            {
-                Console.Error.WriteLine($"[Cache] WarmUp failed: {ex.Message}");
-            }
+            if (!response.IsSuccessStatusCode) return null;
+            return await response.Content.ReadAsByteArrayAsync();
         }
-
-        Console.WriteLine("[Cache] Pre-warming complete.");
+        catch
+        {
+            return null;
+        }
     }
 
     /// <summary>Persists a compiled assembly to localStorage.</summary>
@@ -170,45 +171,55 @@ public class CodeExecutionService
 
             if (_compilationCache.TryGetValue(cacheKey, out var cached))
             {
-                // Cache hit — skip compilation entirely
+                // L1 — in-memory cache hit
                 assemblyBytes = cached;
             }
             else
             {
-                var compilation = CreateCompilation(fullCode);
-
-                // Run the official Projectables source generator on user code when needed
-                if (fullCode.Contains("[Projectable]") || fullCode.Contains("[Projectable("))
-                    compilation = await RunProjectablesGeneratorAsync(compilation);
-
-                using var ms = new MemoryStream();
-                var emitResult = compilation.Emit(ms);
-
-                if (!emitResult.Success)
+                // L2 — try pre-compiled static asset (wwwroot/precompiled/{hash}.dll)
+                assemblyBytes = await TryLoadFromStaticFileAsync(cacheKey);
+                if (assemblyBytes != null)
                 {
-                    var errors = emitResult.Diagnostics
-                        .Where(d => d.Severity == DiagnosticSeverity.Error)
-                        .Select(d => new CompilationError
-                        {
-                            Id = d.Id,
-                            Message = d.GetMessage(),
-                            Line = d.Location.GetMappedLineSpan().StartLinePosition.Line + 1,
-                            Column = d.Location.GetMappedLineSpan().StartLinePosition.Character + 1
-                        })
-                        .ToList();
-
-                    return new ExecutionResult
-                    {
-                        Success = false,
-                        Errors = errors,
-                        Output = "Compilation failed. Check errors below."
-                    };
+                    _compilationCache[cacheKey] = assemblyBytes;
                 }
+                else
+                {
+                    // L3 — compile with Roslyn (user-written code, or first run without static file)
+                    var compilation = CreateCompilation(fullCode);
 
-                assemblyBytes = ms.ToArray();
-                _compilationCache[cacheKey] = assemblyBytes;
-                // Persist asynchronously so future sessions skip compilation
-                await SaveToStorageAsync(cacheKey, assemblyBytes);
+                    // Run the official Projectables source generator on user code when needed
+                    if (fullCode.Contains("[Projectable]") || fullCode.Contains("[Projectable("))
+                        compilation = await RunProjectablesGeneratorAsync(compilation);
+
+                    using var ms = new MemoryStream();
+                    var emitResult = compilation.Emit(ms);
+
+                    if (!emitResult.Success)
+                    {
+                        var errors = emitResult.Diagnostics
+                            .Where(d => d.Severity == DiagnosticSeverity.Error)
+                            .Select(d => new CompilationError
+                            {
+                                Id = d.Id,
+                                Message = d.GetMessage(),
+                                Line = d.Location.GetMappedLineSpan().StartLinePosition.Line + 1,
+                                Column = d.Location.GetMappedLineSpan().StartLinePosition.Character + 1
+                            })
+                            .ToList();
+
+                        return new ExecutionResult
+                        {
+                            Success = false,
+                            Errors = errors,
+                            Output = "Compilation failed. Check errors below."
+                        };
+                    }
+
+                    assemblyBytes = ms.ToArray();
+                    _compilationCache[cacheKey] = assemblyBytes;
+                    // Persist to localStorage so future sessions skip compilation
+                    await SaveToStorageAsync(cacheKey, assemblyBytes);
+                }
             }
 
             var assembly = Assembly.Load(assemblyBytes);
