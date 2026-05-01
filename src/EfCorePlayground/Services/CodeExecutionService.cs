@@ -1,6 +1,8 @@
 using System.Collections;
 using System.Reflection;
 using System.Reflection.Metadata;
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
@@ -20,6 +22,12 @@ public class CodeExecutionService
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
         ReferenceHandler = System.Text.Json.Serialization.ReferenceHandler.IgnoreCycles
     };
+
+    /// <summary>
+    /// Cache of compiled assembly bytes keyed by SHA-256 hash of the full source code.
+    /// Avoids recompiling the same code on every execution.
+    /// </summary>
+    private static readonly Dictionary<string, byte[]> _compilationCache = new();
 
     private readonly IJSRuntime _jsRuntime;
     private readonly HttpClient _http;
@@ -66,42 +74,144 @@ public class CodeExecutionService
                "}";
     }
 
+    /// <summary>
+    /// Computes a SHA-256 hex string for the given source code, used as a cache key.
+    /// </summary>
+    private static string ComputeCodeHash(string code)
+    {
+        var bytes = SHA256.HashData(Encoding.UTF8.GetBytes(code));
+        return Convert.ToHexString(bytes);
+    }
+
+    /// <summary>Clears the in-memory and persistent (localStorage) cache.</summary>
+    public async Task ClearCacheAsync()
+    {
+        _compilationCache.Clear();
+        try { await _jsRuntime.InvokeVoidAsync("efCacheInterop.clear"); }
+        catch (Exception ex) { Console.Error.WriteLine($"[Cache] clear failed: {ex.Message}"); }
+    }
+
+    /// <summary>
+    /// Restores previously compiled assemblies from localStorage into the in-memory cache.
+    /// Call this once at startup before the first execution.
+    /// </summary>
+    public async Task LoadCacheFromStorageAsync()
+    {
+        try
+        {
+            var stored = await _jsRuntime.InvokeAsync<Dictionary<string, string>>("efCacheInterop.loadAll");
+            foreach (var (hash, base64) in stored)
+            {
+                if (!_compilationCache.ContainsKey(hash))
+                    _compilationCache[hash] = Convert.FromBase64String(base64);
+            }
+
+            Console.WriteLine($"[Cache] Loaded {stored.Count} assembly(ies) from localStorage.");
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"[Cache] LoadCacheFromStorageAsync failed: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// Pre-compiles the provided snippets in background so they are ready for instant execution.
+    /// Already-cached snippets are skipped. Designed to be fire-and-forget.
+    /// </summary>
+    public async Task WarmUpAsync(IEnumerable<string> fullCodeSnippets)
+    {
+        foreach (var code in fullCodeSnippets)
+        {
+            var cacheKey = ComputeCodeHash(code);
+            if (_compilationCache.ContainsKey(cacheKey)) continue;
+
+            try
+            {
+                var compilation = CreateCompilation(code);
+                if (code.Contains("[Projectable]") || code.Contains("[Projectable("))
+                    compilation = await RunProjectablesGeneratorAsync(compilation);
+
+                using var ms = new MemoryStream();
+                var emitResult = compilation.Emit(ms);
+                if (!emitResult.Success) continue;
+
+                var bytes = ms.ToArray();
+                _compilationCache[cacheKey] = bytes;
+                await SaveToStorageAsync(cacheKey, bytes);
+            }
+            catch (Exception ex)
+            {
+                Console.Error.WriteLine($"[Cache] WarmUp failed: {ex.Message}");
+            }
+        }
+
+        Console.WriteLine("[Cache] Pre-warming complete.");
+    }
+
+    /// <summary>Persists a compiled assembly to localStorage.</summary>
+    private async Task SaveToStorageAsync(string hash, byte[] bytes)
+    {
+        try
+        {
+            await _jsRuntime.InvokeVoidAsync("efCacheInterop.save", hash, Convert.ToBase64String(bytes));
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"[Cache] SaveToStorageAsync failed: {ex.Message}");
+        }
+    }
+
     public async Task<ExecutionResult> ExecuteAsync(string fullCode)
     {
         try
         {
-            var compilation = CreateCompilation(fullCode);
+            var cacheKey = ComputeCodeHash(fullCode);
+            byte[] assemblyBytes;
 
-            // Run the official Projectables source generator on user code when needed
-            if (fullCode.Contains("[Projectable]") || fullCode.Contains("[Projectable("))
-                compilation = await RunProjectablesGeneratorAsync(compilation);
-
-            using var ms = new MemoryStream();
-            var emitResult = compilation.Emit(ms);
-
-            if (!emitResult.Success)
+            if (_compilationCache.TryGetValue(cacheKey, out var cached))
             {
-                var errors = emitResult.Diagnostics
-                    .Where(d => d.Severity == DiagnosticSeverity.Error)
-                    .Select(d => new CompilationError
-                    {
-                        Id = d.Id,
-                        Message = d.GetMessage(),
-                        Line = d.Location.GetMappedLineSpan().StartLinePosition.Line + 1,
-                        Column = d.Location.GetMappedLineSpan().StartLinePosition.Character + 1
-                    })
-                    .ToList();
+                // Cache hit — skip compilation entirely
+                assemblyBytes = cached;
+            }
+            else
+            {
+                var compilation = CreateCompilation(fullCode);
 
-                return new ExecutionResult
+                // Run the official Projectables source generator on user code when needed
+                if (fullCode.Contains("[Projectable]") || fullCode.Contains("[Projectable("))
+                    compilation = await RunProjectablesGeneratorAsync(compilation);
+
+                using var ms = new MemoryStream();
+                var emitResult = compilation.Emit(ms);
+
+                if (!emitResult.Success)
                 {
-                    Success = false,
-                    Errors = errors,
-                    Output = "Compilation failed. Check errors below."
-                };
+                    var errors = emitResult.Diagnostics
+                        .Where(d => d.Severity == DiagnosticSeverity.Error)
+                        .Select(d => new CompilationError
+                        {
+                            Id = d.Id,
+                            Message = d.GetMessage(),
+                            Line = d.Location.GetMappedLineSpan().StartLinePosition.Line + 1,
+                            Column = d.Location.GetMappedLineSpan().StartLinePosition.Character + 1
+                        })
+                        .ToList();
+
+                    return new ExecutionResult
+                    {
+                        Success = false,
+                        Errors = errors,
+                        Output = "Compilation failed. Check errors below."
+                    };
+                }
+
+                assemblyBytes = ms.ToArray();
+                _compilationCache[cacheKey] = assemblyBytes;
+                // Persist asynchronously so future sessions skip compilation
+                await SaveToStorageAsync(cacheKey, assemblyBytes);
             }
 
-            ms.Seek(0, SeekOrigin.Begin);
-            var assembly = Assembly.Load(ms.ToArray());
+            var assembly = Assembly.Load(assemblyBytes);
 
             return await RunCompiledCode(assembly);
         }
