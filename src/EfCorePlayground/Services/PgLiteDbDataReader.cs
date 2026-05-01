@@ -6,89 +6,107 @@ namespace EfCorePlayground.Services;
 
 /// <summary>
 /// A DbDataReader that wraps PGlite query results returned from JavaScript interop.
-/// Provides the interface EF Core needs to materialize query results.
+/// Supports multiple result sets (NextResult) for batched modification commands.
 /// </summary>
 public class PgLiteDbDataReader : DbDataReader
 {
-    private readonly string[] _columns;
-    private readonly JsonElement[][] _rows;
-    private readonly int _affectedRows;
+    private record ResultSet(string[] Columns, JsonElement[][] Rows, int AffectedRows);
+
+    private readonly List<ResultSet> _resultSets;
+    private int _currentResultSetIndex = 0;
     private int _currentRow = -1;
     private bool _closed;
 
+    private ResultSet Current => _resultSets[_currentResultSetIndex];
+    private string[] Columns => Current.Columns;
+    private JsonElement[][] Rows => Current.Rows;
+
     public PgLiteDbDataReader(string[] columns, JsonElement[][] rows, int affectedRows = -1)
     {
-        _columns = columns;
-        _rows = rows;
-        _affectedRows = affectedRows;
+        _resultSets = new List<ResultSet> { new(columns, rows, affectedRows) };
+    }
+
+    private PgLiteDbDataReader(List<ResultSet> resultSets)
+    {
+        _resultSets = resultSets;
     }
 
     /// <summary>
-    /// Create a PgLiteDbDataReader from a JS interop result (JsonElement with columns, rows, affectedRows).
+    /// Create a PgLiteDbDataReader from a single JS interop result.
     /// </summary>
     public static PgLiteDbDataReader FromJsonResult(JsonElement result)
+        => new PgLiteDbDataReader(new List<ResultSet> { ParseResult(result) });
+
+    /// <summary>
+    /// Create a PgLiteDbDataReader from multiple JS interop results (for batched statements).
+    /// </summary>
+    public static PgLiteDbDataReader FromJsonResults(IEnumerable<JsonElement> results)
+        => new PgLiteDbDataReader(results.Select(ParseResult).ToList());
+
+    private static ResultSet ParseResult(JsonElement result)
     {
         var columns = Array.Empty<string>();
         var rows = Array.Empty<JsonElement[]>();
         var affectedRows = 0;
 
         if (result.TryGetProperty("columns", out var colsEl))
-        {
-            columns = colsEl.EnumerateArray()
-                .Select(c => c.GetString() ?? "")
-                .ToArray();
-        }
+            columns = colsEl.EnumerateArray().Select(c => c.GetString() ?? "").ToArray();
 
         if (result.TryGetProperty("rows", out var rowsEl))
-        {
             rows = rowsEl.EnumerateArray()
                 .Select(row => row.EnumerateArray().ToArray())
                 .ToArray();
-        }
 
         if (result.TryGetProperty("affectedRows", out var arEl))
-        {
             affectedRows = arEl.GetInt32();
-        }
 
-        return new PgLiteDbDataReader(columns, rows, affectedRows);
+        return new ResultSet(columns, rows, affectedRows);
     }
 
-    public override int FieldCount => _columns.Length;
-    public override bool HasRows => _rows.Length > 0;
-    public override int RecordsAffected => _affectedRows;
+    public override int FieldCount => Columns.Length;
+    public override bool HasRows => Rows.Length > 0;
+    public override int RecordsAffected => Current.AffectedRows;
     public override bool IsClosed => _closed;
     public override int Depth => 0;
 
     public override bool Read()
     {
         _currentRow++;
-        return _currentRow < _rows.Length;
+        return _currentRow < Rows.Length;
     }
 
     public override Task<bool> ReadAsync(CancellationToken cancellationToken)
         => Task.FromResult(Read());
 
-    public override bool NextResult() => false;
+    public override bool NextResult()
+    {
+        if (_currentResultSetIndex < _resultSets.Count - 1)
+        {
+            _currentResultSetIndex++;
+            _currentRow = -1;
+            return true;
+        }
+        return false;
+    }
 
     public override Task<bool> NextResultAsync(CancellationToken cancellationToken)
-        => Task.FromResult(false);
+        => Task.FromResult(NextResult());
 
-    public override string GetName(int ordinal) => _columns[ordinal];
+    public override string GetName(int ordinal) => Columns[ordinal];
 
     public override int GetOrdinal(string name)
     {
-        for (int i = 0; i < _columns.Length; i++)
+        for (int i = 0; i < Columns.Length; i++)
         {
-            if (string.Equals(_columns[i], name, StringComparison.OrdinalIgnoreCase))
+            if (string.Equals(Columns[i], name, StringComparison.OrdinalIgnoreCase))
                 return i;
         }
-        throw new IndexOutOfRangeException($"Column '{name}' not found. Available: {string.Join(", ", _columns)}");
+        throw new IndexOutOfRangeException($"Column '{name}' not found. Available: {string.Join(", ", Columns)}");
     }
 
     public override bool IsDBNull(int ordinal)
     {
-        var el = _rows[_currentRow][ordinal];
+        var el = Rows[_currentRow][ordinal];
         return el.ValueKind == JsonValueKind.Null || el.ValueKind == JsonValueKind.Undefined;
     }
 
@@ -97,11 +115,15 @@ public class PgLiteDbDataReader : DbDataReader
         if (IsDBNull(ordinal))
             return DBNull.Value;
 
-        var el = _rows[_currentRow][ordinal];
+        var el = Rows[_currentRow][ordinal];
         return el.ValueKind switch
         {
             JsonValueKind.String => el.GetString()!,
-            JsonValueKind.Number => el.TryGetInt64(out var l) ? l : el.GetDouble(),
+            // Prefer int32 so EF Core can unbox to int without InvalidCastException.
+            // (boxing a long and then casting to int throws at runtime)
+            JsonValueKind.Number when el.TryGetInt32(out var i) => i,
+            JsonValueKind.Number when el.TryGetInt64(out var l) => l,
+            JsonValueKind.Number => el.GetDouble(),
             JsonValueKind.True => true,
             JsonValueKind.False => false,
             _ => el.GetRawText()
@@ -113,52 +135,48 @@ public class PgLiteDbDataReader : DbDataReader
         if (IsDBNull(ordinal))
             return default!;
 
-        var el = _rows[_currentRow][ordinal];
+        var el = Rows[_currentRow][ordinal];
 
-        if (typeof(T) == typeof(int))
-            return (T)(object)el.GetInt32();
-        if (typeof(T) == typeof(long))
-            return (T)(object)el.GetInt64();
-        if (typeof(T) == typeof(short))
-            return (T)(object)(short)el.GetInt32();
-        if (typeof(T) == typeof(byte))
-            return (T)(object)(byte)el.GetInt32();
-        if (typeof(T) == typeof(string))
+        // Unwrap Nullable<T> so callers using Nullable<int> etc. work too
+        var targetType = typeof(T);
+        var underlying = Nullable.GetUnderlyingType(targetType);
+        if (underlying != null)
+        {
+            // Recursively call with the underlying type via reflection to avoid duplicate code
+            var method = typeof(PgLiteDbDataReader)
+                .GetMethod(nameof(GetFieldValue))!
+                .MakeGenericMethod(underlying);
+            return (T)method.Invoke(this, new object[] { ordinal })!;
+        }
+
+        if (targetType == typeof(int))    return (T)(object)el.GetInt32();
+        if (targetType == typeof(long))   return (T)(object)el.GetInt64();
+        if (targetType == typeof(short))  return (T)(object)(short)el.GetInt32();
+        if (targetType == typeof(byte))   return (T)(object)(byte)el.GetInt32();
+        if (targetType == typeof(string))
             return (T)(object)(el.ValueKind == JsonValueKind.String ? el.GetString()! : el.GetRawText());
-        if (typeof(T) == typeof(bool))
-            return (T)(object)el.GetBoolean();
-        if (typeof(T) == typeof(double))
-            return (T)(object)el.GetDouble();
-        if (typeof(T) == typeof(float))
-            return (T)(object)(float)el.GetDouble();
-        if (typeof(T) == typeof(decimal))
-            return (T)(object)el.GetDecimal();
-        if (typeof(T) == typeof(DateTime))
+        if (targetType == typeof(bool))   return (T)(object)el.GetBoolean();
+        if (targetType == typeof(double)) return (T)(object)el.GetDouble();
+        if (targetType == typeof(float))  return (T)(object)(float)el.GetDouble();
+        if (targetType == typeof(decimal)) return (T)(object)el.GetDecimal();
+        if (targetType == typeof(DateTime))
         {
-            if (el.ValueKind == JsonValueKind.String)
-            {
-                var s = el.GetString()!;
-                return (T)(object)DateTime.Parse(s);
-            }
-            return (T)(object)el.GetDateTime();
+            var s = el.ValueKind == JsonValueKind.String ? el.GetString()! : null;
+            return (T)(object)(s != null ? DateTime.Parse(s, null, System.Globalization.DateTimeStyles.RoundtripKind) : el.GetDateTime());
         }
-        if (typeof(T) == typeof(DateTimeOffset))
+        if (targetType == typeof(DateTimeOffset))
         {
-            if (el.ValueKind == JsonValueKind.String)
-            {
-                var s = el.GetString()!;
-                return (T)(object)DateTimeOffset.Parse(s);
-            }
-            return (T)(object)el.GetDateTimeOffset();
+            var s = el.ValueKind == JsonValueKind.String ? el.GetString()! : null;
+            return (T)(object)(s != null ? DateTimeOffset.Parse(s) : el.GetDateTimeOffset());
         }
-        if (typeof(T) == typeof(Guid))
+        if (targetType == typeof(Guid))
         {
-            if (el.ValueKind == JsonValueKind.String)
-                return (T)(object)Guid.Parse(el.GetString()!);
-            return (T)(object)el.GetGuid();
+            return (T)(object)(el.ValueKind == JsonValueKind.String
+                ? Guid.Parse(el.GetString()!)
+                : el.GetGuid());
         }
-        if (typeof(T) == typeof(byte[]))
-            return (T)(object)el.GetBytesFromBase64();
+        if (targetType == typeof(byte[]))  return (T)(object)el.GetBytesFromBase64();
+        if (targetType == typeof(object))  return (T)GetValue(ordinal);
 
         return el.Deserialize<T>()!;
     }

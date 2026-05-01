@@ -6,6 +6,7 @@ using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Storage;
+using Microsoft.EntityFrameworkCore.Update;
 using Microsoft.JSInterop;
 using EfCorePlayground.Models;
 
@@ -106,13 +107,32 @@ public class CodeExecutionService
         }
         catch (Exception ex)
         {
+            // Walk the full exception chain for diagnosis
+            var msgs = new System.Text.StringBuilder();
+            var e = ex;
+            int depth = 0;
+            while (e != null && depth < 6)
+            {
+                msgs.Append($"[{e.GetType().Name}] {e.Message}");
+                if (e.StackTrace != null)
+                    msgs.Append($"\n  at: {e.StackTrace.Split('\n').FirstOrDefault()?.Trim()}");
+                msgs.Append('\n');
+                e = e.InnerException;
+                depth++;
+            }
+            Console.Error.WriteLine("[ExecError]\n" + msgs);
+
             return new ExecutionResult
             {
                 Success = false,
                 Output = $"Runtime error: {ex.Message}",
                 Errors = new List<CompilationError>
                 {
-                    new() { Message = ex.Message, Id = "RUNTIME" }
+                    new()
+                    {
+                        Message = BuildExceptionMessage(ex),
+                        Id = "RUNTIME"
+                    }
                 }
             };
         }
@@ -278,6 +298,10 @@ public class CodeExecutionService
             .UseNpgsql("Host=pglite;Database=playground")
             .ReplaceService<IRelationalConnection, PgLiteRelationalConnection>()
             .ReplaceService<IRelationalDatabaseCreator, PgLiteDatabaseCreator>()
+            // Bypass NpgsqlModificationCommandBatch which hard-casts DbConnection to NpgsqlConnection.
+            // PgLiteModificationCommandBatch uses AffectedCountModificationCommandBatch (EF Core Relational)
+            // which goes through the standard IRelationalCommand path — no Npgsql-specific casts.
+            .ReplaceService<IModificationCommandBatchFactory, PgLiteModificationCommandBatchFactory>()
             .Options;
 
         await using var context = new PlaygroundDbContext(options);
@@ -374,6 +398,28 @@ public class CodeExecutionService
     public void Dispose()
     {
         // PGlite cleanup is handled via JS interop when needed
+    }
+
+    /// <summary>
+    /// Builds a detailed error message chain including exception type names and top stack frame.
+    /// E.g. "[DbUpdateException] ... | [InvalidCastException] ... at ..."
+    /// </summary>
+    private static string BuildExceptionMessage(Exception ex)
+    {
+        var sb = new System.Text.StringBuilder();
+        var e = ex;
+        int depth = 0;
+        while (e != null && depth < 6)
+        {
+            if (depth > 0) sb.Append(" | ");
+            sb.Append($"[{e.GetType().Name}] {e.Message}");
+            var firstFrame = e.StackTrace?.Split('\n').FirstOrDefault(l => l.TrimStart().StartsWith("at "))?.Trim();
+            if (firstFrame != null)
+                sb.Append($"  ({firstFrame})");
+            e = e.InnerException;
+            depth++;
+        }
+        return sb.ToString();
     }
 }
 

@@ -1,7 +1,9 @@
 using System.Data;
 using System.Data.Common;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using Microsoft.JSInterop;
+using Npgsql;
 
 namespace EfCorePlayground.Services;
 
@@ -111,8 +113,7 @@ public class PgLiteDbCommand : DbCommand
         var js = PgLiteJsRuntime.Instance
             ?? throw new InvalidOperationException("PGlite JS runtime not initialized");
 
-        var sql = _commandText;
-        var parameters = ExtractParameters();
+        var (sql, parameters) = PrepareForPgLite();
         PgLiteSqlCapture.Record(FormatSqlWithParams(sql, parameters));
 
         try
@@ -156,31 +157,170 @@ public class PgLiteDbCommand : DbCommand
         var js = PgLiteJsRuntime.Instance
             ?? throw new InvalidOperationException("PGlite JS runtime not initialized");
 
-        var sql = _commandText;
-        var parameters = ExtractParameters();
+        var (sql, parameters) = PrepareForPgLite();
         PgLiteSqlCapture.Record(FormatSqlWithParams(sql, parameters));
 
-        var result = await js.InvokeAsync<JsonElement>(
-            "pgliteInterop.query", cancellationToken, sql, parameters);
+        var statements = SplitIntoStatements(sql, parameters);
+        if (statements.Count == 1)
+        {
+            var result = await js.InvokeAsync<JsonElement>(
+                "pgliteInterop.query", cancellationToken, statements[0].sql, statements[0].values);
+            return PgLiteDbDataReader.FromJsonResult(result);
+        }
 
-        return PgLiteDbDataReader.FromJsonResult(result);
+        // Multiple statements — execute each individually and return a multi-result reader
+        var results = new List<JsonElement>(statements.Count);
+        foreach (var (stmtSql, stmtParams) in statements)
+        {
+            Console.Error.WriteLine($"[PgLite] BATCH STMT: {stmtSql}");
+            var r = await js.InvokeAsync<JsonElement>(
+                "pgliteInterop.query", cancellationToken, stmtSql, stmtParams);
+            results.Add(r);
+        }
+        return PgLiteDbDataReader.FromJsonResults(results);
     }
 
+    // Return NpgsqlParameter so Npgsql type mappings (e.g. NpgsqlTimestampTypeMapping)
+    // pass their "parameter is NpgsqlParameter" check without throwing.
+    // We still read the Value out in ExtractParameters(), so PgLite gets the raw value.
     protected override DbParameter CreateDbParameter()
-        => new PgLiteDbParameter();
+        => new NpgsqlParameter();
 
-    private object?[] ExtractParameters()
+    /// <summary>
+    /// Transforms Npgsql-style named parameters ($p0, $p1, …) into PgLite positional
+    /// parameters ($1, $2, …) and returns the processed SQL together with the value array.
+    /// Processing in reverse index order prevents "$p1" from being matched inside "$p10".
+    /// </summary>
+    private static readonly Regex NamedParamRegex =
+        new(@"[$@]([a-zA-Z_]\w*)", RegexOptions.Compiled);
+
+    // Matches a positional parameter placeholder like $1, $2, $10, ...
+    private static readonly Regex PositionalParamRegex =
+        new(@"\$(\d+)", RegexOptions.Compiled);
+
+    /// <summary>
+    /// Splits a multi-statement SQL (joined by semicolons by EF Core's batch processor)
+    /// into individual statements, re-indexing positional parameters for each sub-statement.
+    /// E.g. "DELETE … WHERE id=$1; DELETE … WHERE id=$2" with values [a,b] becomes
+    ///   [("DELETE … WHERE id=$1", [a]), ("DELETE … WHERE id=$1", [b])]
+    /// </summary>
+    private static IReadOnlyList<(string sql, object?[] values)> SplitIntoStatements(
+        string sql, object?[] allValues)
     {
-        var result = new object?[_parameters.Count];
+        // Split on semicolons; discard empty fragments (trailing semicolons etc.)
+        var parts = sql.Split(';')
+            .Select(s => s.Trim())
+            .Where(s => !string.IsNullOrWhiteSpace(s))
+            .ToArray();
+
+        if (parts.Length <= 1)
+            return new[] { (sql, allValues) };
+
+        var result = new List<(string, object?[])>(parts.Length);
+        foreach (var part in parts)
+        {
+            // Find which $N positions this statement references (1-based, may skip numbers)
+            var refs = PositionalParamRegex.Matches(part)
+                .Select(m => int.Parse(m.Groups[1].Value))
+                .Distinct()
+                .OrderBy(n => n)
+                .ToList();
+
+            if (refs.Count == 0)
+            {
+                result.Add((part, Array.Empty<object?>()));
+                continue;
+            }
+
+            // Reindex: old $N → new $k (1-based within this statement).
+            // Process descending to avoid $1 matching the prefix of $10.
+            var reindexed = part;
+            foreach (var oldIdx in refs.OrderByDescending(n => n))
+            {
+                int newIdx = refs.IndexOf(oldIdx) + 1;
+                // \b won't work after digits; use negative lookahead (?!\d) instead
+                reindexed = Regex.Replace(reindexed, $@"\${oldIdx}(?!\d)", $"${newIdx}");
+            }
+
+            var subValues = refs
+                .Select(n => n - 1 < allValues.Length ? allValues[n - 1] : null)
+                .ToArray();
+
+            result.Add((reindexed, subValues));
+        }
+
+        return result;
+    }
+
+    /// <summary>
+    /// Transforms whatever parameter placeholder format Npgsql EF Core uses
+    /// ($p0, @p0, etc.) into PgLite positional parameters ($1, $2, …).
+    /// Scans the SQL to find named placeholders rather than guessing the prefix,
+    /// so this works with any Npgsql version.
+    /// </summary>
+    private (string sql, object?[] values) PrepareForPgLite()
+    {
+        // Build name→value map from the DbParameter collection
+        var paramValues = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase);
+        var valuesInOrder = new object?[_parameters.Count];
+
         for (int i = 0; i < _parameters.Count; i++)
         {
             var p = (DbParameter)_parameters[i]!;
-            var value = p.Value;
-            if (value == DBNull.Value) value = null;
-            if (value is DateTime dt) value = dt.ToString("o");
-            result[i] = value;
+            var raw = p.Value;
+            object? norm = raw switch
+            {
+                DBNull       => null,
+                null         => null,
+                DateTime dt  => dt.ToString("o"),
+                DateTimeOffset dto => dto.UtcDateTime.ToString("o"),
+                _            => raw
+            };
+            valuesInOrder[i] = norm;
+            // Store under both the raw name and the name stripped of any leading @/$
+            var clean = p.ParameterName.TrimStart('@', '$');
+            paramValues[clean] = norm;
+            if (p.ParameterName != clean)
+                paramValues[p.ParameterName] = norm;
         }
-        return result;
+
+        var sql = _commandText;
+        var matches = NamedParamRegex.Matches(sql);
+
+        // DEBUG — remove once confirmed working
+        Console.Error.WriteLine($"[PgLite] RAW SQL: {sql}");
+        Console.Error.WriteLine($"[PgLite] Named param matches: {matches.Count}");
+        for (int i = 0; i < _parameters.Count; i++)
+            Console.Error.WriteLine($"[PgLite]   param[{i}] name='{((DbParameter)_parameters[i]!).ParameterName}' value='{valuesInOrder[i]}'");
+
+        if (matches.Count == 0)
+        {
+            // SQL already uses $1, $2, … — pass values in collection order
+            return (sql, valuesInOrder);
+        }
+
+        // Collect unique param names in first-appearance order → determines positional index
+        var orderedNames = new List<string>();
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (Match m in matches)
+            if (seen.Add(m.Groups[1].Value))
+                orderedNames.Add(m.Groups[1].Value);
+
+        // Replace longest names first to avoid "$p1" matching the prefix of "$p10"
+        foreach (var name in orderedNames.OrderByDescending(n => n.Length))
+        {
+            int pos = orderedNames.IndexOf(name) + 1; // 1-based positional index
+            sql = sql.Replace($"${name}", $"${pos}");
+            sql = sql.Replace($"@{name}", $"${pos}");
+        }
+
+        // Build values array in the order params first appear in SQL
+        var namedValues = orderedNames
+            .Select(n => paramValues.TryGetValue(n, out var v) ? v : null)
+            .ToArray();
+
+        Console.Error.WriteLine($"[PgLite] TRANSFORMED SQL: {sql}");
+        return (sql, namedValues);
     }
 
     /// <summary>
