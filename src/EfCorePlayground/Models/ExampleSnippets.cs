@@ -1,11 +1,13 @@
-﻿namespace EfCorePlayground.Models;
+﻿using System.Diagnostics.CodeAnalysis;
+
+namespace EfCorePlayground.Models;
 
 /// <summary>
 /// Catalogue of example snippets shown in ExamplesPanel and used for cache pre-warming.
 /// </summary>
 public static class ExampleSnippets
 {
-    public record Example(string Title, string Code, bool IsFullCode = false);
+    public record Example(string Title, [StringSyntax("C#")] string Code, bool IsFullCode = false);
 
     public static readonly Example[] All =
     [
