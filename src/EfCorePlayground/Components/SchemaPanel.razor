@@ -45,7 +45,7 @@
 </div>
 
 @code {
-    private bool showSchema = true;
+    private bool showSchema = false;
 
     private record ColumnInfo(string Name, string Type, bool IsPrimaryKey);
     private record TableInfo(string Name, ColumnInfo[] Columns);
