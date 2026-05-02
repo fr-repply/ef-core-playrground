@@ -447,10 +447,7 @@ public class CodeExecutionService
         var result = resultTask != null ? await resultTask : null;
 
         // Collect captured SQL
-        var capturedSql = PgLiteSqlCapture.Stop();
-        string? generatedSql = capturedSql.Count > 0
-            ? string.Join("\n\n", capturedSql)
-            : null;
+        var capturedQueries = PgLiteSqlCapture.Stop();
 
         // Format the result
         var (output, columns, rows) = FormatResult(result);
@@ -461,7 +458,7 @@ public class CodeExecutionService
             Output = output,
             Columns = columns,
             Rows = rows,
-            GeneratedSql = generatedSql
+            CapturedQueries = capturedQueries.Count > 0 ? capturedQueries : null
         };
     }
 
@@ -551,7 +548,12 @@ public class ExecutionResult
     public List<CompilationError>? Errors { get; set; }
     public List<string>? Columns { get; set; }
     public List<Dictionary<string, object?>>? Rows { get; set; }
-    public string? GeneratedSql { get; set; }
+    public List<CapturedQuery>? CapturedQueries { get; set; }
+
+    /// <summary>Full SQL text for the Monaco viewer, joining all captured queries.</summary>
+    public string? GeneratedSql => CapturedQueries is { Count: > 0 }
+        ? string.Join("\n\n", CapturedQueries.Select(q => q.Sql))
+        : null;
 }
 
 public class CompilationError

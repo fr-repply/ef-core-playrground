@@ -157,6 +157,44 @@ window.monacoInterop = {
 
     _sqlEditor: null,
     _sqlLangRegistered: false,
+    _sqlHighlightDecoration: null,
+
+    /**
+     * Highlights lines [startLine, endLine] (1-based) in the SQL viewer.
+     * Called on mouseenter of a query tag badge.
+     */
+    highlightSqlRange: function (startLine, endLine) {
+        var editor = window.monacoInterop._sqlEditor;
+        if (!editor) return;
+        var model = editor.getModel();
+        if (!model) return;
+        var lineCount = model.getLineCount();
+        var safeEnd = Math.min(endLine, lineCount);
+        var endCol = model.getLineMaxColumn(safeEnd);
+
+        if (window.monacoInterop._sqlHighlightDecoration) {
+            window.monacoInterop._sqlHighlightDecoration.clear();
+        }
+        window.monacoInterop._sqlHighlightDecoration = editor.createDecorationsCollection([{
+            range: new monaco.Range(startLine, 1, safeEnd, endCol),
+            options: {
+                isWholeLine: true,
+                className: 'sql-highlight-range',
+                overviewRuler: { color: '#569cd6', position: monaco.editor.OverviewRulerLane.Full }
+            }
+        }]);
+        editor.revealLinesInCenterIfOutsideViewport(startLine, safeEnd);
+    },
+
+    /**
+     * Clears the SQL highlight decoration. Called on mouseleave of a query tag badge.
+     */
+    clearSqlHighlight: function () {
+        if (window.monacoInterop._sqlHighlightDecoration) {
+            window.monacoInterop._sqlHighlightDecoration.clear();
+            window.monacoInterop._sqlHighlightDecoration = null;
+        }
+    },
 
     _initSqlViewer: function (container, sql) {
         if (!window.monacoInterop._sqlLangRegistered) {

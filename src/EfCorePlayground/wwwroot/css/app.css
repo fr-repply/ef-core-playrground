@@ -101,3 +101,9 @@ pre {
 ::-webkit-scrollbar-thumb:hover {
     background: #555;
 }
+
+/* SQL viewer — query highlight on badge hover */
+.monaco-editor .sql-highlight-range {
+    background: rgba(86, 156, 214, 0.18) !important;
+    border-left: 3px solid #569cd6 !important;
+}

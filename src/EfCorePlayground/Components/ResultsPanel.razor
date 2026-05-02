@@ -108,11 +108,57 @@
             {
                 <div class="border-top flex-grow-1 d-flex flex-column" style="min-height: 120px;">
                     <div class="bg-dark text-white py-1 px-2 small d-flex justify-content-between align-items-center flex-shrink-0">
-                        <span><i class="bi bi-database me-1"></i> SQL généré</span>
+                        <span>
+                            <i class="bi bi-database me-1"></i> SQL généré
+                            <span class="text-secondary ms-1">(@Result.CapturedQueries!.Count requête(s))</span>
+                        </span>
                         <button class="btn btn-sm btn-outline-light py-0 px-1" @onclick="CopySql" title="Copier le SQL">
                             <i class="bi bi-clipboard"></i>
                         </button>
                     </div>
+
+                    @* Per-query summary badges (shown when TagWith or metadata is present) *@
+                    @if (Result.CapturedQueries!.Any(q => q.Tag != null || q.RowCount.HasValue))
+                    {
+                        var ranges = GetQueryLineRanges(Result.CapturedQueries!);
+                        <div class="px-2 py-1 bg-black border-bottom border-secondary d-flex flex-wrap gap-1 flex-shrink-0">
+                            @foreach (var (q, i) in Result.CapturedQueries!.Select((q, i) => (q, i)))
+                            {
+                                var isGood = q.Tag?.StartsWith("✅") == true;
+                                var isBad  = q.Tag?.StartsWith("❌") == true;
+                                var pillCss = isBad ? "bg-danger" : isGood ? "bg-success" : "bg-secondary";
+                                var label = q.Tag ?? $"Requête {i + 1}";
+                                var startLine = ranges[i].Start;
+                                var endLine   = ranges[i].End;
+                                <span class="badge @pillCss d-inline-flex align-items-center gap-1 text-wrap text-start"
+                                      style="cursor: default; max-width:100%"
+                                      title="Survolez pour mettre en évidence dans le SQL"
+                                      @onmouseenter="@(() => HighlightSqlRange(startLine, endLine))"
+                                      @onmouseleave="ClearSqlHighlight">
+                                    @label
+                                    @if (q.ColumnCount.HasValue && q.ColumnCount > 0)
+                                    {
+                                        <span class="badge bg-light text-dark">@q.ColumnCount col.</span>
+                                    }
+                                    @if (q.RowCount.HasValue)
+                                    {
+                                        var rowLabel = q.ColumnCount.HasValue && q.ColumnCount > 0
+                                            ? $"{q.RowCount} ligne(s)"
+                                            : $"{q.RowCount} affectée(s)";
+                                        <span class="badge bg-light text-dark">@rowLabel</span>
+                                    }
+                                    @if (q.TrackedEntities.HasValue)
+                                    {
+                                        var trackCss = q.TrackedEntities > 0 ? "bg-warning text-dark" : "bg-light text-dark";
+                                        <span class="badge @trackCss" title="Entités dans le ChangeTracker après cette requête">
+                                            @q.TrackedEntities tracked
+                                        </span>
+                                    }
+                                </span>
+                            }
+                        </div>
+                    }
+
                     <div id="sql-viewer-container" class="flex-grow-1" style="min-height: 80px;"></div>
                 </div>
             }
@@ -148,6 +194,29 @@
             await JS.InvokeVoidAsync("navigator.clipboard.writeText", Result.GeneratedSql);
         }
     }
+
+    /// <summary>
+    /// Computes the 1-based start/end line of each query in the joined SQL string.
+    /// Queries are separated by \n\n (one blank line) in GeneratedSql.
+    /// </summary>
+    private static (int Start, int End)[] GetQueryLineRanges(List<CapturedQuery> queries)
+    {
+        var ranges = new (int Start, int End)[queries.Count];
+        int currentLine = 1;
+        for (int i = 0; i < queries.Count; i++)
+        {
+            int lineCount = queries[i].Sql.Count(c => c == '\n') + 1;
+            ranges[i] = (currentLine, currentLine + lineCount - 1);
+            currentLine += lineCount + 1; // +1 for the blank separator line (\n\n)
+        }
+        return ranges;
+    }
+
+    private async Task HighlightSqlRange(int startLine, int endLine)
+        => await JS.InvokeVoidAsync("monacoInterop.highlightSqlRange", startLine, endLine);
+
+    private async Task ClearSqlHighlight()
+        => await JS.InvokeVoidAsync("monacoInterop.clearSqlHighlight");
 
     private string FormatValue(object? value)
     {

@@ -1,6 +1,7 @@
 using Microsoft.EntityFrameworkCore;
 using EntityFrameworkCore.Projectables;
 using EfCorePlayground.Models;
+using EfCorePlayground.Services;
 
 namespace EfCorePlayground.Models;
 
@@ -12,6 +13,13 @@ public class PlaygroundDbContext : DbContext
     public DbSet<Post> Posts => Set<Post>();
     public DbSet<Author> Authors => Set<Author>();
     public DbSet<Tag> Tags => Set<Tag>();
+
+    /// <summary>
+    /// Records the current <see cref="ChangeTracker"/> entity count on the last captured SQL query,
+    /// so it appears as a badge in the SQL panel. Call immediately after <c>ToListAsync()</c>.
+    /// </summary>
+    public void AnnotateLastQueryWithTracking()
+        => PgLiteSqlCapture.AnnotateLast(ChangeTracker.Entries().Count());
 
     protected override void OnConfiguring(DbContextOptionsBuilder optionsBuilder)
     {

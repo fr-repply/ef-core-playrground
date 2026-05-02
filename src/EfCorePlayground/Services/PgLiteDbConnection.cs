@@ -17,23 +17,46 @@ public static class PgLiteJsRuntime
 }
 
 /// <summary>
+/// A SQL query captured during EF Core execution, with optional result metadata.
+/// </summary>
+public record CapturedQuery(string Sql, int? RowCount = null, int? ColumnCount = null, int? TrackedEntities = null)
+{
+    /// <summary>
+    /// Extracts the label from the first <c>-- comment</c> line injected by <c>TagWith()</c>.
+    /// Returns null if the query has no tag.
+    /// </summary>
+    public string? Tag => Sql.Split('\n')
+        .Select(l => l.Trim())
+        .FirstOrDefault(l => l.StartsWith("--"))
+        ?.TrimStart('-').Trim();
+}
+
+/// <summary>
 /// Captures SQL queries executed by EF Core through PGlite.
 /// Call <see cref="Start"/> before execution and <see cref="Stop"/> after to collect the SQL.
 /// </summary>
 public static class PgLiteSqlCapture
 {
-    private static List<string>? _captured;
+    private static List<CapturedQuery>? _captured;
 
-    public static void Start() => _captured = new List<string>();
+    public static void Start() => _captured = new List<CapturedQuery>();
 
-    public static void Record(string sql)
+    public static void Record(string sql, int? rowCount = null, int? colCount = null)
+        => _captured?.Add(new CapturedQuery(sql, rowCount, colCount));
+
+    /// <summary>
+    /// Annotates the last recorded query with the number of tracked EF Core entities.
+    /// Call this right after <c>ToListAsync()</c> before the next query.
+    /// </summary>
+    public static void AnnotateLast(int trackedEntities)
     {
-        _captured?.Add(sql);
+        if (_captured is not { Count: > 0 }) return;
+        _captured[^1] = _captured[^1] with { TrackedEntities = trackedEntities };
     }
 
-    public static List<string> Stop()
+    public static List<CapturedQuery> Stop()
     {
-        var result = _captured ?? new List<string>();
+        var result = _captured ?? new List<CapturedQuery>();
         _captured = null;
         return result;
     }
@@ -114,21 +137,22 @@ public class PgLiteDbCommand : DbCommand
             ?? throw new InvalidOperationException("PGlite JS runtime not initialized");
 
         var (sql, parameters) = PrepareForPgLite();
-        PgLiteSqlCapture.Record(FormatSqlWithParams(sql, parameters));
+        var formattedSql = FormatSqlWithParams(sql, parameters);
 
         try
         {
             var result = await js.InvokeAsync<JsonElement>(
                 "pgliteInterop.query", cancellationToken, sql, parameters);
 
-            if (result.TryGetProperty("affectedRows", out var ar))
-                return ar.GetInt32();
-            return 0;
+            int affected = result.TryGetProperty("affectedRows", out var ar) ? ar.GetInt32() : 0;
+            PgLiteSqlCapture.Record(formattedSql, rowCount: affected, colCount: null);
+            return affected;
         }
         catch
         {
             // For DDL that can't use parameterized query, try exec
             await js.InvokeVoidAsync("pgliteInterop.exec", cancellationToken, sql);
+            PgLiteSqlCapture.Record(formattedSql);
             return 0;
         }
     }
@@ -158,25 +182,33 @@ public class PgLiteDbCommand : DbCommand
             ?? throw new InvalidOperationException("PGlite JS runtime not initialized");
 
         var (sql, parameters) = PrepareForPgLite();
-        PgLiteSqlCapture.Record(FormatSqlWithParams(sql, parameters));
+        var formattedSql = FormatSqlWithParams(sql, parameters);
 
         var statements = SplitIntoStatements(sql, parameters);
         if (statements.Count == 1)
         {
             var result = await js.InvokeAsync<JsonElement>(
                 "pgliteInterop.query", cancellationToken, statements[0].sql, statements[0].values);
+
+            int rows = result.TryGetProperty("rows", out var rowsEl) ? rowsEl.GetArrayLength() : 0;
+            int cols = result.TryGetProperty("columns", out var colsEl) ? colsEl.GetArrayLength() : 0;
+            PgLiteSqlCapture.Record(formattedSql, rowCount: rows, colCount: cols);
             return PgLiteDbDataReader.FromJsonResult(result);
         }
 
         // Multiple statements — execute each individually and return a multi-result reader
         var results = new List<JsonElement>(statements.Count);
+        int totalRows = 0, lastCols = 0;
         foreach (var (stmtSql, stmtParams) in statements)
         {
             Console.Error.WriteLine($"[PgLite] BATCH STMT: {stmtSql}");
             var r = await js.InvokeAsync<JsonElement>(
                 "pgliteInterop.query", cancellationToken, stmtSql, stmtParams);
+            if (r.TryGetProperty("rows", out var re)) totalRows += re.GetArrayLength();
+            if (r.TryGetProperty("columns", out var ce)) lastCols = ce.GetArrayLength();
             results.Add(r);
         }
+        PgLiteSqlCapture.Record(formattedSql, rowCount: totalRows, colCount: lastCols > 0 ? lastCols : null);
         return PgLiteDbDataReader.FromJsonResults(results);
     }
 
