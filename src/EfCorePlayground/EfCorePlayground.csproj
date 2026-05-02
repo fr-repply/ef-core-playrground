@@ -7,6 +7,7 @@
     <OverrideHtmlAssetPlaceholders>true</OverrideHtmlAssetPlaceholders>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <WasmBuildNative>true</WasmBuildNative>
+    <CompressionEnabled>false</CompressionEnabled>
   </PropertyGroup>
 
   <ItemGroup>
@@ -18,6 +19,17 @@
     <PackageReference Include="Npgsql.EntityFrameworkCore.PostgreSQL" Version="10.0.1" />
     <PackageReference Include="System.Reflection.Metadata" Version="10.0.7" />
   </ItemGroup>
+
+  <!-- Remove any leftover .dll files from wwwroot/ref/ that a previous build may have created.
+       The WASM ManagedToNativeGenerator task scans all *.dll in the publish output and
+       chokes on BCL assemblies (e.g. System.Runtime) because they're already in its
+       MetadataLoadContext. BCL ref assemblies are now served as *.bin to avoid this. -->
+  <Target Name="CleanRefDlls" BeforeTargets="ResolveAssemblyReferences">
+    <ItemGroup>
+      <_StaleRefDlls Include="$(MSBuildProjectDirectory)\wwwroot\ref\*.dll" />
+    </ItemGroup>
+    <Delete Files="@(_StaleRefDlls)" />
+  </Target>
 
   <!-- Run Vite build before .NET build -->
   <Target Name="NpmInstall" BeforeTargets="ViteBuild" Condition="!Exists('node_modules')">
@@ -47,10 +59,13 @@
       <PrecompilerProject>$(MSBuildThisFileDirectory)..\..\tools\EfCorePlayground.Precompiler\EfCorePlayground.Precompiler.csproj</PrecompilerProject>
       <PrecompiledOutputDir>$(MSBuildProjectDirectory)\wwwroot\precompiled</PrecompiledOutputDir>
       <ProjectablesGeneratorDll>$(PkgEntityFrameworkCore_Projectables_Abstractions)\analyzers\dotnet\cs\EntityFrameworkCore.Projectables.Generator.dll</ProjectablesGeneratorDll>
+      <!-- BCL ref assemblies output dir: served as static assets for Roslyn WASM compilation -->
+      <BclRefOutputDir>$(MSBuildProjectDirectory)\wwwroot\ref</BclRefOutputDir>
     </PropertyGroup>
     <MakeDir Directories="$(PrecompiledOutputDir)" />
+    <MakeDir Directories="$(BclRefOutputDir)" />
     <Exec
-      Command="dotnet run --project &quot;$(PrecompilerProject)&quot; -- &quot;$(OutputPath)EfCorePlayground.dll&quot; &quot;$(PrecompiledOutputDir)&quot; &quot;$(ProjectablesGeneratorDll)&quot;"
+      Command="dotnet run --project &quot;$(PrecompilerProject)&quot; -- &quot;$(OutputPath)EfCorePlayground.dll&quot; &quot;$(PrecompiledOutputDir)&quot; &quot;$(ProjectablesGeneratorDll)&quot; &quot;$(BclRefOutputDir)&quot;"
       WorkingDirectory="$(MSBuildProjectDirectory)"
       ContinueOnError="true" />
   </Target>
@@ -61,6 +76,27 @@
     <None Remove="node_modules\**" />
     <Content Remove="ClientApp\**" />
     <None Remove="ClientApp\**" />
+  </ItemGroup>
+  <ItemGroup>
+    <_ContentIncludedByDefault Remove="wwwroot\css\app.css" />
+    <_ContentIncludedByDefault Remove="wwwroot\ref\manifest.txt" />
+    <_ContentIncludedByDefault Remove="wwwroot\ref\netstandard.bin" />
+    <_ContentIncludedByDefault Remove="wwwroot\ref\System.Collections.bin" />
+    <_ContentIncludedByDefault Remove="wwwroot\ref\System.Collections.Concurrent.bin" />
+    <_ContentIncludedByDefault Remove="wwwroot\ref\System.ComponentModel.Annotations.bin" />
+    <_ContentIncludedByDefault Remove="wwwroot\ref\System.ComponentModel.Primitives.bin" />
+    <_ContentIncludedByDefault Remove="wwwroot\ref\System.ComponentModel.TypeConverter.bin" />
+    <_ContentIncludedByDefault Remove="wwwroot\ref\System.Console.bin" />
+    <_ContentIncludedByDefault Remove="wwwroot\ref\System.Linq.bin" />
+    <_ContentIncludedByDefault Remove="wwwroot\ref\System.Linq.Expressions.bin" />
+    <_ContentIncludedByDefault Remove="wwwroot\ref\System.Linq.Queryable.bin" />
+    <_ContentIncludedByDefault Remove="wwwroot\ref\System.ObjectModel.bin" />
+    <_ContentIncludedByDefault Remove="wwwroot\ref\System.Runtime.bin" />
+    <_ContentIncludedByDefault Remove="wwwroot\ref\System.Runtime.InteropServices.bin" />
+    <_ContentIncludedByDefault Remove="wwwroot\ref\System.Text.Json.bin" />
+    <_ContentIncludedByDefault Remove="wwwroot\ref\System.Threading.bin" />
+    <_ContentIncludedByDefault Remove="wwwroot\ref\System.Threading.Tasks.bin" />
+    <_ContentIncludedByDefault Remove="wwwroot\ref\System.Threading.Tasks.Extensions.bin" />
   </ItemGroup>
 
 </Project>

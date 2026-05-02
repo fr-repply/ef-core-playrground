@@ -14,16 +14,18 @@ using System.Text;
 using EfCorePlayground.Models;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
+using Microsoft.EntityFrameworkCore;
 
 if (args.Length < 2)
 {
-    Console.Error.WriteLine("Usage: precompiler <EfCorePlayground.dll> <output-dir> [<Projectables.Generator.dll>]");
+    Console.Error.WriteLine("Usage: precompiler <EfCorePlayground.dll> <output-dir> [<Projectables.Generator.dll>] [<ref-output-dir>]");
     return 1;
 }
 
 var efDllPath      = args[0];
 var outputDir      = args[1];
 var generatorPath  = args.Length > 2 ? args[2] : null;
+var refOutputDir   = args.Length > 3 ? args[3] : null;
 
 if (!File.Exists(efDllPath))
 {
@@ -105,7 +107,151 @@ foreach (var example in ExampleSnippets.All)
 }
 
 Console.WriteLine($"[Precompiler] Done — {compiled} compiled, {skipped} skipped, {failed} failed.");
+
+// Copy BCL reference assemblies so the WASM runtime can load them from wwwroot/ref/
+// and use them as Roslyn metadata references instead of the trimmed/transformed WASM ones.
+if (refOutputDir != null)
+    CopyBclRefAssemblies(refOutputDir);
+
 return failed > 0 ? 1 : 0;
+
+
+
+
+
+
+
+// ──────────────────────────────────────────────────────────────────────────────
+//  BCL reference assembly copy  (for WASM Roslyn compilation)
+// ──────────────────────────────────────────────────────────────────────────────
+
+/// <summary>
+/// Copies the minimal set of BCL reference assemblies to <paramref name="outputDir"/> so the
+/// Blazor WASM page can download them and use them as Roslyn metadata references.
+///
+/// Strategy:
+///   1. Try the .NET SDK *reference pack* (Microsoft.NETCore.App.Ref) — small stub-only DLLs,
+///      no TypeForwardedTo conflicts, designed for compilers.
+///   2. Fall back to the *runtime pack* assemblies loaded in this process (still full, untrimmed
+///      desktop DLLs — much better than the WASM-loaded versions).
+///
+/// Writes a <c>manifest.txt</c> listing the assembly simple names that were copied.
+/// </summary>
+static void CopyBclRefAssemblies(string outputDir)
+{
+    // The ordered list of assemblies we want for Roslyn WASM compilation.
+    // System.Runtime covers Object/Task<>/AsyncTaskMethodBuilder<T>/… in the ref pack,
+    // so we do NOT need System.Private.CoreLib separately when using ref-pack DLLs.
+    var wanted = new[]
+    {
+        "System.Runtime",
+        "System.Collections",
+        "System.Collections.Concurrent",
+        "System.Linq",
+        "System.Linq.Expressions",
+        "System.Linq.Queryable",
+        "System.Threading",
+        "System.Threading.Tasks",
+        "System.Threading.Tasks.Extensions",
+        "System.ComponentModel.Primitives",
+        "System.ComponentModel.Annotations",
+        "System.ComponentModel.TypeConverter",
+        "System.Text.Json",
+        "System.Console",
+        "System.ObjectModel",
+        "System.Runtime.InteropServices",
+        "netstandard",
+    };
+
+    Directory.CreateDirectory(outputDir);
+
+    // ── 1. Try the SDK reference pack ────────────────────────────────────────
+    var refPackDir = FindNetRefPackDir();
+    if (refPackDir != null)
+        Console.WriteLine($"[Precompiler] REF PACK → {refPackDir}");
+    else
+        Console.WriteLine("[Precompiler] Ref pack not found; falling back to runtime assemblies.");
+
+    // ── 2. Build a lookup of runtime-assembly paths as fallback ──────────────
+    var runtimeByName = AppDomain.CurrentDomain.GetAssemblies()
+        .Where(a => !a.IsDynamic && !string.IsNullOrEmpty(a.Location) && File.Exists(a.Location))
+        .GroupBy(a => a.GetName().Name ?? "", StringComparer.OrdinalIgnoreCase)
+        .ToDictionary(g => g.Key, g => g.First().Location, StringComparer.OrdinalIgnoreCase);
+
+    // ── 3. Copy each wanted assembly ─────────────────────────────────────────
+    var copied = new List<string>();
+    foreach (var name in wanted)
+    {
+        var destPath = Path.Combine(outputDir, name + ".bin"); // .bin avoids WASM P/Invoke scanner
+
+        // Try ref pack first
+        string? srcPath = null;
+        if (refPackDir != null)
+        {
+            var candidate = Path.Combine(refPackDir, name + ".dll");
+            if (File.Exists(candidate)) srcPath = candidate;
+        }
+
+        // Fallback: runtime assembly
+        if (srcPath == null && runtimeByName.TryGetValue(name, out var runtimePath))
+            srcPath = runtimePath;
+
+        if (srcPath == null)
+        {
+            Console.WriteLine($"[Precompiler] REF   SKIP  {name}.dll (not found)");
+            continue;
+        }
+
+        try
+        {
+            File.Copy(srcPath, destPath, overwrite: true);
+            copied.Add(name);
+            Console.WriteLine($"[Precompiler] REF   OK    {name}.bin ({new FileInfo(destPath).Length / 1024.0:F0} KB)");
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"[Precompiler] REF   FAIL  {name}.dll — {ex.Message}");
+        }
+    }
+
+    // Write manifest so the WASM service knows which files are available
+    File.WriteAllLines(Path.Combine(outputDir, "manifest.txt"), copied);
+    Console.WriteLine($"[Precompiler] REF   manifest.txt written ({copied.Count} entries).");
+}
+
+/// <summary>
+/// Attempts to locate the SDK's reference-pack directory for the current .NET major version.
+/// e.g. /usr/share/dotnet/packs/Microsoft.NETCore.App.Ref/10.0.0/ref/net10.0
+/// </summary>
+static string? FindNetRefPackDir()
+{
+    try
+    {
+        var runtimeDir = System.Runtime.InteropServices.RuntimeEnvironment.GetRuntimeDirectory();
+        // runtimeDir → /path/to/dotnet/shared/Microsoft.NETCore.App/10.0.x/
+        var versionName = Path.GetFileName(runtimeDir.TrimEnd(Path.DirectorySeparatorChar));
+        var dotnetRoot  = new DirectoryInfo(runtimeDir).Parent?.Parent?.Parent?.FullName;
+        if (dotnetRoot == null) return null;
+
+        var major = versionName.Split('.')[0]; // "10"
+        var packsRoot = Path.Combine(dotnetRoot, "packs", "Microsoft.NETCore.App.Ref");
+        if (!Directory.Exists(packsRoot)) return null;
+
+        // Try exact version first, then any matching major
+        foreach (var versionDir in new[] { versionName }
+            .Concat(Directory.GetDirectories(packsRoot)
+                .Select(Path.GetFileName)
+                .Where(v => v != null && v.StartsWith(major + "."))
+                .OrderByDescending(v => v)!))
+        {
+            if (versionDir == null) continue;
+            var candidate = Path.Combine(packsRoot, versionDir, "ref", $"net{major}.0");
+            if (Directory.Exists(candidate)) return candidate;
+        }
+    }
+    catch { /* ignore */ }
+    return null;
+}
 
 // ──────────────────────────────────────────────────────────────────────────────
 //  Helpers
@@ -160,12 +306,24 @@ static List<MetadataReference> BuildReferences(string efDllPath)
     // 1. The main EfCorePlayground assembly (contains Models, PlaygroundDbContext …)
     TryAdd(efDllPath);
 
-    // 2. Force-load assemblies that may be referenced by EF Core but not yet in AppDomain
+    // 2. All DLLs in the same output directory — includes EF Core, Npgsql and all transitive
+    //    dependencies at the EXACT versions used to build EfCorePlayground.dll.
+    //    This is more reliable than AppDomain scan which may load different versions.
+    var efDir = Path.GetDirectoryName(efDllPath);
+    if (efDir != null)
+    {
+        foreach (var dll in Directory.GetFiles(efDir, "*.dll"))
+            TryAdd(dll);
+    }
+
+    // 3. Force-load specific assemblies that may not be in efDir (Projectables, analyzers)
     _ = typeof(System.ComponentModel.DataAnnotations.RequiredAttribute);
     _ = typeof(System.Linq.Queryable);
+    _ = typeof(Microsoft.EntityFrameworkCore.DbContext);
+    _ = typeof(Npgsql.NpgsqlConnection);
     _ = typeof(EntityFrameworkCore.Projectables.ProjectableAttribute);
 
-    // 3. All assemblies already loaded in this process (EF Core, Npgsql, BCL …)
+    // 4. Remaining AppDomain assemblies (Roslyn, etc.) not already added
     foreach (var asm in AppDomain.CurrentDomain.GetAssemblies().Where(a => !a.IsDynamic))
         TryAdd(asm.Location);
 

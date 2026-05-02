@@ -33,6 +33,7 @@ public class CodeExecutionService
     private readonly HttpClient _http;
     private byte[]? _generatorDllCache;
 
+
     public CodeExecutionService(IJSRuntime jsRuntime, HttpClient http)
     {
         _jsRuntime = jsRuntime;
@@ -96,6 +97,7 @@ public class CodeExecutionService
             catch { /* best-effort */ }
         });
     }
+
 
     /// <summary>Clears the in-memory and persistent (localStorage) cache.</summary>
     public async Task ClearCacheAsync()
@@ -164,6 +166,7 @@ public class CodeExecutionService
 
     public async Task<ExecutionResult> ExecuteAsync(string fullCode)
     {
+
         try
         {
             var cacheKey = ComputeCodeHash(fullCode);
@@ -341,33 +344,53 @@ public class CodeExecutionService
 
     private List<MetadataReference> GetMetadataReferences()
     {
-        // Force-load assemblies that EF Core depends on but may not be loaded yet in WASM
-        _ = typeof(System.ComponentModel.IListSource);
-        _ = typeof(System.ComponentModel.TypeConverter);
-        _ = typeof(System.ComponentModel.DataAnnotations.RequiredAttribute);
-        _ = typeof(EntityFrameworkCore.Projectables.ProjectableAttribute);
-        // Force-load System.Linq.Queryable (needed for IQueryable Select/Where/etc.)
-        _ = typeof(System.Linq.Queryable);
+        // Force-load assemblies that may be lazily initialized in WASM
+        var pinned = new[]
+        {
+            typeof(object).Assembly,                                                    // System.Private.CoreLib
+            typeof(System.Linq.Enumerable).Assembly,                                   // System.Linq
+            typeof(System.Linq.Queryable).Assembly,                                    // System.Linq.Queryable
+            typeof(System.Linq.Expressions.Expression).Assembly,                       // System.Linq.Expressions
+            typeof(System.ComponentModel.DataAnnotations.RequiredAttribute).Assembly,  // System.ComponentModel.Annotations
+            typeof(System.Text.Json.JsonSerializer).Assembly,                          // System.Text.Json
+            typeof(Microsoft.EntityFrameworkCore.DbContext).Assembly,                  // EF Core
+            typeof(EntityFrameworkCore.Projectables.ProjectableAttribute).Assembly,    // Projectables
+            typeof(EfCorePlayground.Models.Blog).Assembly,                             // App models
+            Assembly.GetExecutingAssembly(),
+        };
 
-        // Explicitly load assemblies by name that WASM might not resolve via typeof alone
-        foreach (var name in new[]
+        // Build a name → assembly map; pinned entries win over AppDomain duplicates
+        var byName = new Dictionary<string, Assembly>(StringComparer.OrdinalIgnoreCase);
+        foreach (var a in pinned.Where(a => !a.IsDynamic))
         {
-            "System.ComponentModel.TypeConverter",
-            "System.ComponentModel.Primitives",
-            "System.ComponentModel.Annotations",
-            "EntityFrameworkCore.Projectables.Abstractions",
-            "System.Linq.Queryable",
-        })
-        {
-            try { Assembly.Load(name); } catch { }
+            var n = a.GetName().Name;
+            if (n != null) byName.TryAdd(n, a);
         }
+        foreach (var a in AppDomain.CurrentDomain.GetAssemblies().Where(a => !a.IsDynamic))
+        {
+            var n = a.GetName().Name;
+            if (n != null) byName.TryAdd(n, a);
+        }
+
+        // Both WASM corlibassemblies are needed:
+        //   • System.Runtime (b03f5f7f11d50a3a)   — EF Core and NuGet packages reference
+        //                                            types from this identity (compiled against
+        //                                            the SDK ref pack with the same identity)
+        //   • System.Private.CoreLib (7cec85d7bea7798e) — WASM-linked app assemblies may
+        //                                            reference types from this identity
+        //
+        // Including both is safe because System.Runtime WASM is a *pure TypeForwardedTo facade*:
+        // every type in it simply redirects to System.Private.CoreLib. Roslyn follows the chain
+        // to ONE real definition → no CS0433.  CS0433 only occurred when the ref-pack
+        // System.Runtime (which *directly* stubs every type) was mixed with WASM CoreLib.
+        //
+        // Remove only mscorlib — it is a legacy alias for CoreLib that would confuse corlib
+        // detection if it appears as a third candidate.
+        byName.Remove("mscorlib");
 
         var references = new List<MetadataReference>();
 
-        var loadedAssemblies = AppDomain.CurrentDomain.GetAssemblies()
-            .Where(a => !a.IsDynamic);
-
-        foreach (var assembly in loadedAssemblies)
+        foreach (var assembly in byName.Values)
         {
             try
             {
@@ -382,26 +405,19 @@ public class CodeExecutionService
                     }
                 }
             }
-            catch
-            {
-                // Fallback: try loading from file location
-            }
+            catch { /* fall through */ }
 
             try
             {
                 if (!string.IsNullOrEmpty(assembly.Location))
-                {
                     references.Add(MetadataReference.CreateFromFile(assembly.Location));
-                }
             }
-            catch
-            {
-                // Skip assemblies we can't reference
-            }
+            catch { /* skip */ }
         }
 
         return references;
     }
+
 
     // ──────────────────────────────────────────────────────────────────
     //  Code execution helpers
