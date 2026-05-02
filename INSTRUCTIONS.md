@@ -1,39 +1,10 @@
-# EF Core 10 Playground — Instructions & Bonnes Pratiques
+# EF Core 10 Playground — Guide utilisateur
 
 ## 🎯 Présentation
 
-Ce playground est un environnement interactif de type REPL pour **Entity Framework Core 10**. Il permet aux apprenants d'écrire et d'exécuter des requêtes LINQ directement dans le navigateur, sans aucune installation côté serveur.
+Environnement interactif de type REPL pour **Entity Framework Core 10** : écrivez et exécutez des requêtes LINQ directement dans le navigateur, sans installation côté serveur.
 
-### Architecture
-
-```
-┌──────────────────────────────────────────────┐
-│              Navigateur Web                   │
-│                                              │
-│  ┌─────────────┐  ┌────────────────────────┐ │
-│  │ Monaco Editor│  │ Résultats (table/arbre)│ │
-│  │ (C# / LINQ) │  │                        │ │
-│  └──────┬──────┘  └────────────▲───────────┘ │
-│         │                      │             │
-│  ┌──────▼──────────────────────┴───────────┐ │
-│  │         .NET WASM Runtime                │ │
-│  │  ┌──────────┐  ┌──────────┐ ┌────────┐  │ │
-│  │  │  Roslyn   │  │ EF Core  │ │ SQLite │  │ │
-│  │  │(compile)  │  │  10      │ │ (WASM) │  │ │
-│  │  └──────────┘  └──────────┘ └────────┘  │ │
-│  └─────────────────────────────────────────┘ │
-└──────────────────────────────────────────────┘
-```
-
-**Technologies :**
-- **Blazor WebAssembly** (.NET 10) — Runtime .NET dans le navigateur
-- **Roslyn** (Microsoft.CodeAnalysis.CSharp) — Compilation C# dynamique in-browser
-- **EF Core 10 + SQLite** — ORM + base de données en mémoire (WASM)
-- **Monaco Editor** (via npm) — Éditeur de code riche (même éditeur que VS Code)
-- **Bootstrap 5** (via npm) — Framework CSS pour l'interface utilisateur
-- **Vite** — Bundler pour les assets frontend (Monaco, Bootstrap, JS interop)
-
-> **Aucun CDN n'est utilisé** — tous les assets sont servis localement via Vite.
+> **Architecture, stack technique, modèle de données, conventions de code** → voir [`.github/copilot-instructions.md`](.github/copilot-instructions.md).
 
 ## 🚀 Démarrage rapide
 
@@ -46,7 +17,7 @@ Ce playground est un environnement interactif de type REPL pour **Entity Framewo
 ```bash
 cd src/EfCorePlayground
 npm install     # Installe Monaco, Bootstrap, Vite
-dotnet run      # Vite build automatique + serveur Blazor
+dotnet run      # Vite build + Precompiler + serveur Blazor
 ```
 
 Ouvrir http://localhost:5000 dans le navigateur.
@@ -60,81 +31,21 @@ npx playwright install chromium
 npx playwright test
 ```
 
-## 📐 Structure du projet
-
-```
-├── EfCorePlayground.sln         # Solution .NET
-├── src/EfCorePlayground/
-│   ├── ClientApp/               # Sources frontend (bundlés par Vite)
-│   │   ├── main.js              # Point d'entrée Vite (imports CSS + JS)
-│   │   └── monaco-interop.js    # Interop JS pour Monaco Editor
-│   ├── Components/              # Composants Blazor réutilisables
-│   │   ├── SchemaPanel.razor    # Affichage du schéma de la BDD
-│   │   ├── ExamplesPanel.razor  # Liste d'exemples cliquables
-│   │   └── ResultsPanel.razor   # Affichage des résultats (table/erreurs)
-│   ├── Layout/
-│   │   └── MainLayout.razor     # Layout principal (navbar)
-│   ├── Models/
-│   │   ├── Blog.cs              # Entité Blog
-│   │   ├── Post.cs              # Entité Post
-│   │   ├── Author.cs            # Entité Author
-│   │   ├── Tag.cs               # Entité Tag
-│   │   └── PlaygroundDbContext.cs # DbContext avec seed data
-│   ├── Pages/
-│   │   └── Playground.razor     # Page principale du playground
-│   ├── Services/
-│   │   └── CodeExecutionService.cs # Service de compilation/exécution Roslyn
-│   ├── wwwroot/
-│   │   ├── css/app.css          # Styles personnalisés
-│   │   ├── vendor/              # Sortie Vite (généré, gitignored)
-│   │   └── index.html           # Page hôte
-│   ├── vite.config.js           # Configuration Vite
-│   ├── package.json             # Dépendances npm (Monaco, Bootstrap, Vite)
-│   ├── Program.cs               # Point d'entrée Blazor WASM
-│   └── EfCorePlayground.csproj  # Fichier projet .NET (intègre Vite build)
-├── tests/e2e/
-│   ├── tests/playground.spec.ts # Tests Playwright E2E
-│   └── playwright.config.ts     # Configuration Playwright
-├── INSTRUCTIONS.md              # Ce fichier
-└── README.md
-```
-
-## 🗄️ Schéma de la base de données
-
-### Entités
-
-| Table    | Colonnes                                       |
-|----------|------------------------------------------------|
-| Blogs    | BlogId (PK), Name, Url, Rating, CreatedAt      |
-| Posts    | PostId (PK), Title, Content, PublishedDate, BlogId (FK), AuthorId (FK) |
-| Authors  | AuthorId (PK), Name, Email, Bio                |
-| Tags     | TagId (PK), Name                               |
-
-### Relations
-- **Blog** 1──* **Post** (un blog a plusieurs posts)
-- **Author** 1──* **Post** (un auteur a plusieurs posts)
-- **Post** \*──\* **Tag** (relation many-to-many via table de jointure `PostTag`)
-
-### Données seedées
-- 4 blogs, 3 auteurs, 10 posts, 8 tags avec des relations réalistes
-
 ## ✍️ Comment écrire des requêtes
 
-Le code que vous écrivez est injecté dans une méthode async qui reçoit un `PlaygroundDbContext db`. Vous devez retourner un résultat avec `return`.
-
-### Exemples
+Le code est injecté dans une méthode `async Task<object?> Execute(PlaygroundDbContext db)`. Retournez un résultat avec `return`.
 
 ```csharp
 // Lister tous les blogs
 return await db.Blogs.ToListAsync();
 
-// Filtrage
+// Filtrage + tri
 return await db.Blogs
     .Where(b => b.Rating >= 4)
     .OrderByDescending(b => b.Rating)
     .ToListAsync();
 
-// Jointures (Include)
+// Jointures (Include ou Select)
 return await db.Posts
     .Include(p => p.Author)
     .Select(p => new { p.Title, Auteur = p.Author.Name })
@@ -152,50 +63,23 @@ return await db.Posts
     .ToListAsync();
 ```
 
-## 🏗️ Bonnes pratiques
+### Bonnes pratiques pour les apprenants
 
-### Pour les contributeurs
-
-1. **Composants Blazor** : Gardez les composants petits et focalisés. Chaque composant ne devrait avoir qu'une seule responsabilité.
-
-2. **JS Interop** : Minimisez les appels JS interop. Regroupez les opérations quand c'est possible. Utilisez `IJSRuntime` pour les appels unidirectionnels et `DotNetObjectReference` pour les callbacks.
-
-3. **Gestion mémoire WASM** : Le runtime .NET WASM a des contraintes mémoire. Disposez toujours les `SqliteConnection` et `DbContext` après utilisation.
-
-4. **Roslyn dans WASM** : La compilation Roslyn dans le navigateur est lente (~1-3s). N'optimisez pas prématurément mais gardez le code compilé minimal.
-
-5. **Tests E2E** : Les tests Playwright doivent attendre le chargement complet du WASM (~30s au premier lancement). Utilisez des timeouts appropriés.
-
-### Pour les apprenants
-
-1. **Toujours utiliser `await`** : Les requêtes EF Core sont asynchrones. N'oubliez pas `await` et `ToListAsync()`.
-
-2. **`Select` avant `ToList`** : Projetez vos données avec `Select()` pour éviter de charger des entités complètes.
-
-3. **Évitez les N+1** : Utilisez `Include()` pour les relations que vous allez accéder, ou projetez directement avec `Select()`.
-
-4. **AsNoTracking** : Pour les requêtes en lecture seule, `AsNoTracking()` améliore les performances.
+- **Toujours utiliser `await`** : les requêtes EF Core sont asynchrones.
+- **`Select` avant `ToList`** : projetez vos données pour éviter de charger des entités complètes.
+- **Évitez les N+1** : utilisez `Include()` ou projetez directement avec `Select()`.
+- **`AsNoTracking()`** : pour les requêtes en lecture seule, améliore les performances.
 
 ## 🌐 Déploiement statique (GitHub Pages)
-
-Le projet se déploie comme un site statique :
 
 ```bash
 cd src/EfCorePlayground
 npm ci
 dotnet publish -c Release -o ../../dist
-
-# Les fichiers statiques sont dans dist/wwwroot/
-# Déployez ce dossier sur GitHub Pages, Netlify, Vercel, etc.
+# Déployez dist/wwwroot/ sur GitHub Pages, Netlify, Vercel, etc.
 ```
 
-### Configuration GitHub Pages
-
-1. Allez dans **Settings > Pages** de votre repository
-2. Source : **GitHub Actions**
-3. Créez un workflow `.github/workflows/deploy.yml` (voir ci-dessous)
-
-### Workflow de déploiement
+### Workflow GitHub Actions
 
 ```yaml
 name: Deploy to GitHub Pages
@@ -232,15 +116,16 @@ jobs:
         uses: actions/deploy-pages@v4
 ```
 
-> **Note :** Pour GitHub Pages avec un sous-chemin (ex: `/ef-core-playground/`), modifiez la balise `<base href="/">` dans `index.html` en `<base href="/ef-core-playground/">`.
+> Pour un sous-chemin GitHub Pages (ex: `/ef-core-playground/`), modifiez `<base href="/">` en `<base href="/ef-core-playground/">` dans `wwwroot/index.html`.
 
 ## 🔮 Évolutions futures
 
-- [ ] Ajouter la coloration syntaxique complète C# avec autocomplétion contextuelle
-- [ ] Afficher le SQL généré par EF Core pour chaque requête
-- [ ] Supporter le chargement de code depuis une URL (tutoriels externes)
-- [ ] Ajouter un mode « pas à pas » pour décomposer les requêtes LINQ
-- [ ] Sauvegarder/partager des requêtes via URL avec paramètres
-- [ ] Ajouter d'autres schémas de base de données (e-commerce, réseau social, etc.)
-- [x] ~~Migrer vers PGlite quand le support WASM sera mature~~ (fait — PGlite est intégré comme backend PostgreSQL in-browser)
-- [ ] Ajouter des exercices guidés avec validation automatique
+- [ ] Autocomplétion C# contextuelle dans Monaco
+- [x] Charger du code depuis une URL (tutoriels externes)
+- [ ] Mode « pas à pas » pour décomposer les requêtes LINQ
+- [x] Sauvegarder/partager des requêtes via URL
+- [ ] Autres schémas de base de données (e-commerce, réseau social…)
+- [ ] Exercices guidés avec validation automatique
+- [x] ~~Migrer vers PGlite~~ — PostgreSQL WASM intégré via PGlite
+- [x] ~~Afficher le SQL généré~~ — panneau SQL intégré via `PgLiteSqlCapture`
+- [x] ~~Cache des assemblies compilées~~ — pré-compilation au build + cache mémoire
