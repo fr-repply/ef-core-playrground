@@ -57,8 +57,34 @@
         }
         else
         {
+            @* ── View toggle (tree / table) ── *@
+            @if (Result.RichJson != null && Result.Columns?.Count > 0)
+            {
+                <div class="px-2 pt-2 pb-1 d-flex align-items-center gap-2 flex-shrink-0 border-bottom">
+                    <span class="small text-muted me-1">Vue :</span>
+                    <div class="btn-group btn-group-sm" role="group">
+                        <button class="btn @(_showTreeView ? "btn-secondary" : "btn-outline-secondary")"
+                                @onclick='() => _showTreeView = true'>
+                            <i class="bi bi-diagram-3 me-1"></i>Arbre
+                        </button>
+                        <button class="btn @(!_showTreeView ? "btn-secondary" : "btn-outline-secondary")"
+                                @onclick='() => _showTreeView = false'>
+                            <i class="bi bi-table me-1"></i>Tableau
+                        </button>
+                    </div>
+                    <span class="small text-muted ms-auto">@Result.Output</span>
+                </div>
+            }
+
             @* Data results *@
-            @if (Result.Columns?.Count > 0)
+            @if (Result.RichJson != null && _showTreeView)
+            {
+                @* Hierarchical tree view *@
+                <div class="flex-shrink-0 overflow-auto p-2" style="max-height: 50%;">
+                    <JsonTreeViewer Json="@Result.RichJson" />
+                </div>
+            }
+            else if (Result.Columns?.Count > 0)
             {
                 <div class="table-responsive flex-shrink-0" style="max-height: 50%;">
                     <table class="table table-striped table-hover table-sm mb-0" id="results-table">
@@ -94,6 +120,13 @@
                             }
                         </tbody>
                     </table>
+                </div>
+            }
+            else if (Result.RichJson != null)
+            {
+                @* Single object or non-collection — tree view *@
+                <div class="flex-shrink-0 overflow-auto p-2" style="max-height: 50%;">
+                    <JsonTreeViewer Json="@Result.RichJson" />
                 </div>
             }
             else
@@ -171,6 +204,19 @@
     [Parameter] public bool IsExecuting { get; set; }
 
     private string? _lastSql;
+    private bool _showTreeView = true;
+    private ExecutionResult? _previousResult;
+
+    protected override void OnParametersSet()
+    {
+        // Reset view mode when a new result arrives
+        if (Result != _previousResult)
+        {
+            _previousResult = Result;
+            // Default to tree view when rich JSON is available, otherwise table
+            _showTreeView = Result?.RichJson != null;
+        }
+    }
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {

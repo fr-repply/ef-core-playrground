@@ -111,7 +111,7 @@ Console.WriteLine($"[Precompiler] Done — {compiled} compiled, {skipped} skippe
 // Copy BCL reference assemblies so the WASM runtime can load them from wwwroot/ref/
 // and use them as Roslyn metadata references instead of the trimmed/transformed WASM ones.
 if (refOutputDir != null)
-    CopyBclRefAssemblies(refOutputDir);
+    CopyBclRefAssemblies(refOutputDir, efDllPath);
 
 return failed > 0 ? 1 : 0;
 
@@ -129,19 +129,30 @@ return failed > 0 ? 1 : 0;
 /// Copies the minimal set of BCL reference assemblies to <paramref name="outputDir"/> so the
 /// Blazor WASM page can download them and use them as Roslyn metadata references.
 ///
-/// Strategy:
-///   1. Try the .NET SDK *reference pack* (Microsoft.NETCore.App.Ref) — small stub-only DLLs,
-///      no TypeForwardedTo conflicts, designed for compilers.
-///   2. Fall back to the *runtime pack* assemblies loaded in this process (still full, untrimmed
-///      desktop DLLs — much better than the WASM-loaded versions).
+/// Strategy — we MUST use TypeForwardedTo facades (not the SDK ref pack) because in WASM the
+/// IL linker rewrites app-assembly type references to use System.Private.CoreLib identity
+/// (PublicKeyToken=7cec85d7bea7798e). If we included SDK ref-pack stubs (which *directly*
+/// define the same types under System.Runtime/b03f5f7f11d50a3a), Roslyn would see the same
+/// fully-qualified type name in two assemblies → CS0433.
+///
+/// TypeForwardedTo facades (the small ~40–600 KB runtime DLLs) are safe alongside CoreLib
+/// because Roslyn follows the TypeForwardedTo chain to the one canonical CoreLib definition.
+///
+///   1. <paramref name="efDllPath"/> directory — the exact WASM build-output DLLs; these are
+///      already the correct TypeForwardedTo facades.
+///   2. AppDomain assemblies of this process — the desktop .NET shared-framework facades;
+///      identical TypeForwardedTo behaviour, different platform but same metadata.
+///
+/// The SDK reference pack is intentionally skipped: using it alongside System.Private.CoreLib
+/// always causes CS0433/CS0012 for types that appear in both.
 ///
 /// Writes a <c>manifest.txt</c> listing the assembly simple names that were copied.
 /// </summary>
-static void CopyBclRefAssemblies(string outputDir)
+static void CopyBclRefAssemblies(string outputDir, string efDllPath)
 {
     // The ordered list of assemblies we want for Roslyn WASM compilation.
-    // System.Runtime covers Object/Task<>/AsyncTaskMethodBuilder<T>/… in the ref pack,
-    // so we do NOT need System.Private.CoreLib separately when using ref-pack DLLs.
+    // System.Private.CoreLib itself is NOT listed here — the WASM runtime always has it in
+    // AppDomain; CodeExecutionService adds it via TryGetRawMetadata at runtime.
     var wanted = new[]
     {
         "System.Runtime",
@@ -165,14 +176,19 @@ static void CopyBclRefAssemblies(string outputDir)
 
     Directory.CreateDirectory(outputDir);
 
-    // ── 1. Try the SDK reference pack ────────────────────────────────────────
-    var refPackDir = FindNetRefPackDir();
-    if (refPackDir != null)
-        Console.WriteLine($"[Precompiler] REF PACK → {refPackDir}");
-    else
-        Console.WriteLine("[Precompiler] Ref pack not found; falling back to runtime assemblies.");
+    // ── 1. Build a lookup from the WASM build-output directory ───────────────
+    //    These are the exact TypeForwardedTo facade DLLs shipped with the app.
+    var efDir = Path.GetDirectoryName(efDllPath) ?? "";
+    var efDirByName = Directory.Exists(efDir)
+        ? Directory.GetFiles(efDir, "*.dll")
+              .GroupBy(p => Path.GetFileNameWithoutExtension(p), StringComparer.OrdinalIgnoreCase)
+              .ToDictionary(g => g.Key, g => g.First(), StringComparer.OrdinalIgnoreCase)
+        : new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
 
-    // ── 2. Build a lookup of runtime-assembly paths as fallback ──────────────
+    Console.WriteLine($"[Precompiler] REF   efDir → {efDir} ({efDirByName.Count} DLLs)");
+
+    // ── 2. Build a fallback lookup from this process's AppDomain assemblies ──
+    //    On desktop .NET these are the same TypeForwardedTo facades (shared framework).
     var runtimeByName = AppDomain.CurrentDomain.GetAssemblies()
         .Where(a => !a.IsDynamic && !string.IsNullOrEmpty(a.Location) && File.Exists(a.Location))
         .GroupBy(a => a.GetName().Name ?? "", StringComparer.OrdinalIgnoreCase)
@@ -184,21 +200,16 @@ static void CopyBclRefAssemblies(string outputDir)
     {
         var destPath = Path.Combine(outputDir, name + ".bin"); // .bin avoids WASM P/Invoke scanner
 
-        // Try ref pack first
+        // Priority: efDir → runtime AppDomain → skip (never use SDK ref pack)
         string? srcPath = null;
-        if (refPackDir != null)
-        {
-            var candidate = Path.Combine(refPackDir, name + ".dll");
-            if (File.Exists(candidate)) srcPath = candidate;
-        }
-
-        // Fallback: runtime assembly
-        if (srcPath == null && runtimeByName.TryGetValue(name, out var runtimePath))
+        if (efDirByName.TryGetValue(name, out var efPath))
+            srcPath = efPath;
+        else if (runtimeByName.TryGetValue(name, out var runtimePath))
             srcPath = runtimePath;
 
         if (srcPath == null)
         {
-            Console.WriteLine($"[Precompiler] REF   SKIP  {name}.dll (not found)");
+            Console.WriteLine($"[Precompiler] REF   SKIP  {name}.dll (not found in efDir or runtime)");
             continue;
         }
 
@@ -206,7 +217,7 @@ static void CopyBclRefAssemblies(string outputDir)
         {
             File.Copy(srcPath, destPath, overwrite: true);
             copied.Add(name);
-            Console.WriteLine($"[Precompiler] REF   OK    {name}.bin ({new FileInfo(destPath).Length / 1024.0:F0} KB)");
+            Console.WriteLine($"[Precompiler] REF   OK    {name}.bin ({new FileInfo(destPath).Length / 1024.0:F0} KB)  ← {srcPath}");
         }
         catch (Exception ex)
         {
@@ -219,39 +230,6 @@ static void CopyBclRefAssemblies(string outputDir)
     Console.WriteLine($"[Precompiler] REF   manifest.txt written ({copied.Count} entries).");
 }
 
-/// <summary>
-/// Attempts to locate the SDK's reference-pack directory for the current .NET major version.
-/// e.g. /usr/share/dotnet/packs/Microsoft.NETCore.App.Ref/10.0.0/ref/net10.0
-/// </summary>
-static string? FindNetRefPackDir()
-{
-    try
-    {
-        var runtimeDir = System.Runtime.InteropServices.RuntimeEnvironment.GetRuntimeDirectory();
-        // runtimeDir → /path/to/dotnet/shared/Microsoft.NETCore.App/10.0.x/
-        var versionName = Path.GetFileName(runtimeDir.TrimEnd(Path.DirectorySeparatorChar));
-        var dotnetRoot  = new DirectoryInfo(runtimeDir).Parent?.Parent?.Parent?.FullName;
-        if (dotnetRoot == null) return null;
-
-        var major = versionName.Split('.')[0]; // "10"
-        var packsRoot = Path.Combine(dotnetRoot, "packs", "Microsoft.NETCore.App.Ref");
-        if (!Directory.Exists(packsRoot)) return null;
-
-        // Try exact version first, then any matching major
-        foreach (var versionDir in new[] { versionName }
-            .Concat(Directory.GetDirectories(packsRoot)
-                .Select(Path.GetFileName)
-                .Where(v => v != null && v.StartsWith(major + "."))
-                .OrderByDescending(v => v)!))
-        {
-            if (versionDir == null) continue;
-            var candidate = Path.Combine(packsRoot, versionDir, "ref", $"net{major}.0");
-            if (Directory.Exists(candidate)) return candidate;
-        }
-    }
-    catch { /* ignore */ }
-    return null;
-}
 
 // ──────────────────────────────────────────────────────────────────────────────
 //  Helpers

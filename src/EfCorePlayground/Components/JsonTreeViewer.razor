@@ -1,0 +1,60 @@
+﻿@using System.Text.Json
+
+@if (_root.HasValue)
+{
+    <div class="json-tree-viewer">
+        @if (_root.Value.ValueKind == JsonValueKind.Array)
+        {
+            @* Render each top-level item as a named, expanded node *@
+            @foreach (var (item, i) in _root.Value.EnumerateArray().Select((v, i) => (v, i)))
+            {
+                <JsonTreeNode Label="@GetRootItemLabel(item, i)"
+                              Value="@item"
+                              Depth="0"
+                              InitiallyExpanded="true" />
+            }
+        }
+        else
+        {
+            <JsonTreeNode Label="result"
+                          Value="@_root.Value"
+                          Depth="0"
+                          InitiallyExpanded="true" />
+        }
+    </div>
+}
+
+@code {
+    [Parameter] public string? Json { get; set; }
+
+    private JsonElement? _root;
+    private string? _lastJson;
+
+    protected override void OnParametersSet()
+    {
+        if (Json == _lastJson) return;
+        _lastJson = Json;
+        _root = null;
+
+        if (!string.IsNullOrEmpty(Json))
+        {
+            try
+            {
+                using var doc = JsonDocument.Parse(Json);
+                _root = doc.RootElement.Clone();   // Clone = standalone, doc can be disposed
+            }
+            catch { /* invalid JSON – show nothing */ }
+        }
+    }
+
+    private string GetRootItemLabel(JsonElement item, int index)
+    {
+        if (item.ValueKind != JsonValueKind.Object) return index.ToString();
+        if (item.TryGetProperty("id", out var id))
+            return $"#{id.GetRawText()}";
+        if (item.TryGetProperty("name", out var name) && name.ValueKind == JsonValueKind.String)
+            return name.GetString() ?? $"[{index}]";
+        return $"[{index}]";
+    }
+}
+

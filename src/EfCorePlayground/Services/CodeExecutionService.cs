@@ -33,6 +33,10 @@ public class CodeExecutionService
     private readonly HttpClient _http;
     private byte[]? _generatorDllCache;
 
+    // ── BCL reference-assembly cache (loaded from wwwroot/ref/*.bin) ──────────
+    private static MetadataReference[]? _cachedBclRefs;
+    private static readonly SemaphoreSlim _refLoadLock = new(1, 1);
+
 
     public CodeExecutionService(IJSRuntime jsRuntime, HttpClient http)
     {
@@ -91,9 +95,9 @@ public class CodeExecutionService
     /// </summary>
     public void WarmUpRoslynBackground()
     {
-        _ = Task.Run(() =>
+        _ = Task.Run(async () =>
         {
-            try { CreateCompilation(BuildFullCode("return null;")).Emit(Stream.Null); }
+            try { (await CreateCompilationAsync(BuildFullCode("return null;"))).Emit(Stream.Null); }
             catch { /* best-effort */ }
         });
     }
@@ -188,7 +192,7 @@ public class CodeExecutionService
                 else
                 {
                     // L3 — compile with Roslyn (user-written code, or first run without static file)
-                    var compilation = CreateCompilation(fullCode);
+                    var compilation = await CreateCompilationAsync(fullCode);
 
                     // Run the official Projectables source generator on user code when needed
                     if (fullCode.Contains("[Projectable]") || fullCode.Contains("[Projectable("))
@@ -262,10 +266,10 @@ public class CodeExecutionService
         }
     }
 
-    private CSharpCompilation CreateCompilation(string code)
+    private async Task<CSharpCompilation> CreateCompilationAsync(string code)
     {
         var syntaxTree = CSharpSyntaxTree.ParseText(code);
-        var references = GetMetadataReferences();
+        var references = await GetMetadataReferencesAsync();
 
         return CSharpCompilation.Create(
             "UserCodeAssembly",
@@ -342,24 +346,114 @@ public class CodeExecutionService
     //  Metadata references
     // ──────────────────────────────────────────────────────────────────
 
-    private List<MetadataReference> GetMetadataReferences()
+    /// <summary>
+    /// Builds the full list of Roslyn metadata references used for user-code compilation.
+    ///
+    /// Strategy (two-tier):
+    ///  1. BCL types  → loaded from <c>wwwroot/ref/*.bin</c>.  These are the runtime
+    ///     TypeForwardedTo facade DLLs (e.g. System.Runtime ~44 KB, NOT the SDK ref pack
+    ///     ~862 KB).  Each facade TypeForwards every type to System.Private.CoreLib so Roslyn
+    ///     resolves to one canonical definition — no CS0433.  They are generated at build time
+    ///     by the Precompiler from the WASM build-output DLLs.
+    ///  2. Non-BCL types (EF Core, Projectables, app models, …) + System.Private.CoreLib →
+    ///     extracted directly from in-process runtime assemblies via TryGetRawMetadata.
+    ///
+    /// Why CoreLib MUST be included alongside the facade refs:
+    ///   In WASM publish mode the IL linker rewrites type references in app assemblies to use
+    ///   System.Private.CoreLib/7cec85d7bea7798e directly.  The facade System.Runtime.bin
+    ///   TypeForwards to CoreLib, so Roslyn follows the chain and finds the single definition
+    ///   in CoreLib — no CS0433.  If CoreLib were absent, those IL-linked references would be
+    ///   unresolvable → CS0012.
+    ///
+    /// The BCL refs are fetched once and cached in a static field for all subsequent compilations.
+    /// </summary>
+    private async Task<List<MetadataReference>> GetMetadataReferencesAsync()
     {
-        // Force-load assemblies that may be lazily initialized in WASM
+        // ── Step 1: load (and cache) BCL reference assemblies from wwwroot/ref/*.bin ──
+        if (_cachedBclRefs == null)
+        {
+            await _refLoadLock.WaitAsync();
+            try
+            {
+                if (_cachedBclRefs == null) // double-checked
+                {
+                    var bclRefs = new List<MetadataReference>();
+                    try
+                    {
+                        var manifest = await _http.GetStringAsync("ref/manifest.txt");
+                        foreach (var line in manifest.Split('\n', StringSplitOptions.RemoveEmptyEntries))
+                        {
+                            var name = line.Trim();
+                            if (string.IsNullOrEmpty(name)) continue;
+                            try
+                            {
+                                var bytes = await _http.GetByteArrayAsync($"ref/{name}.bin");
+                                bclRefs.Add(MetadataReference.CreateFromImage(bytes));
+                            }
+                            catch (Exception ex)
+                            {
+                                Console.Error.WriteLine($"[Refs] Skip ref/{name}.bin: {ex.Message}");
+                            }
+                        }
+                        Console.WriteLine($"[Refs] Loaded {bclRefs.Count} BCL reference assemblies from wwwroot/ref/.");
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.Error.WriteLine($"[Refs] Could not load BCL refs: {ex.Message}");
+                    }
+                    _cachedBclRefs = bclRefs.ToArray();
+                }
+            }
+            finally
+            {
+                _refLoadLock.Release();
+            }
+        }
+
+        var references = new List<MetadataReference>(_cachedBclRefs);
+
+        // ── Step 2: runtime assemblies for non-BCL packages + System.Private.CoreLib ─────
+        // The bclNames set lists assemblies already covered by ref/*.bin (TypeForwardedTo
+        // facades); adding them AGAIN from the runtime would double-register the same assembly
+        // identity on the Roslyn reference list (harmless but wasteful — skip them).
+        // System.Private.CoreLib is intentionally NOT in this exclusion list: CoreLib must
+        // come from the WASM AppDomain so Roslyn can resolve the TypeForwardedTo chains from
+        // the facade refs down to the single canonical CoreLib definition.
+        var bclNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            "System.Runtime",
+            "System.Collections",
+            "System.Collections.Concurrent",
+            "System.Linq",
+            "System.Linq.Expressions",
+            "System.Linq.Queryable",
+            "System.Threading",
+            "System.Threading.Tasks",
+            "System.Threading.Tasks.Extensions",
+            "System.ComponentModel.Primitives",
+            "System.ComponentModel.Annotations",
+            "System.ComponentModel.TypeConverter",
+            "System.Text.Json",
+            "System.Console",
+            "System.ObjectModel",
+            "System.Runtime.InteropServices",
+            "netstandard",
+            // legacy aliases
+            "mscorlib",
+        };
+
+        // Pinned assemblies — always added (then filtered by bclNames below).
+        // typeof(object).Assembly = System.Private.CoreLib — kept because it is NOT in bclNames;
+        // this ensures WASM-linked assemblies that reference CoreLib identity resolve correctly.
         var pinned = new[]
         {
             typeof(object).Assembly,                                                    // System.Private.CoreLib
-            typeof(System.Linq.Enumerable).Assembly,                                   // System.Linq
-            typeof(System.Linq.Queryable).Assembly,                                    // System.Linq.Queryable
-            typeof(System.Linq.Expressions.Expression).Assembly,                       // System.Linq.Expressions
-            typeof(System.ComponentModel.DataAnnotations.RequiredAttribute).Assembly,  // System.ComponentModel.Annotations
-            typeof(System.Text.Json.JsonSerializer).Assembly,                          // System.Text.Json
             typeof(Microsoft.EntityFrameworkCore.DbContext).Assembly,                  // EF Core
             typeof(EntityFrameworkCore.Projectables.ProjectableAttribute).Assembly,    // Projectables
             typeof(EfCorePlayground.Models.Blog).Assembly,                             // App models
             Assembly.GetExecutingAssembly(),
         };
 
-        // Build a name → assembly map; pinned entries win over AppDomain duplicates
         var byName = new Dictionary<string, Assembly>(StringComparer.OrdinalIgnoreCase);
         foreach (var a in pinned.Where(a => !a.IsDynamic))
         {
@@ -372,23 +466,8 @@ public class CodeExecutionService
             if (n != null) byName.TryAdd(n, a);
         }
 
-        // Both WASM corlibassemblies are needed:
-        //   • System.Runtime (b03f5f7f11d50a3a)   — EF Core and NuGet packages reference
-        //                                            types from this identity (compiled against
-        //                                            the SDK ref pack with the same identity)
-        //   • System.Private.CoreLib (7cec85d7bea7798e) — WASM-linked app assemblies may
-        //                                            reference types from this identity
-        //
-        // Including both is safe because System.Runtime WASM is a *pure TypeForwardedTo facade*:
-        // every type in it simply redirects to System.Private.CoreLib. Roslyn follows the chain
-        // to ONE real definition → no CS0433.  CS0433 only occurred when the ref-pack
-        // System.Runtime (which *directly* stubs every type) was mixed with WASM CoreLib.
-        //
-        // Remove only mscorlib — it is a legacy alias for CoreLib that would confuse corlib
-        // detection if it appears as a third candidate.
-        byName.Remove("mscorlib");
-
-        var references = new List<MetadataReference>();
+        // Remove BCL names — already covered by ref/*.bin
+        foreach (var name in bclNames) byName.Remove(name);
 
         foreach (var assembly in byName.Values)
         {
@@ -468,12 +547,21 @@ public class CodeExecutionService
         // Format the result
         var (output, columns, rows) = FormatResult(result);
 
+        // Full JSON serialization (includes navigation properties) for tree view
+        string? richJson = null;
+        if (result != null && result is not string && !(result.GetType().IsPrimitive) && !(result is decimal) && !(result is DateTime))
+        {
+            try { richJson = JsonSerializer.Serialize(result, JsonOptions); }
+            catch { /* best-effort */ }
+        }
+
         return new ExecutionResult
         {
             Success = true,
             Output = output,
             Columns = columns,
             Rows = rows,
+            RichJson = richJson,
             CapturedQueries = capturedQueries.Count > 0 ? capturedQueries : null
         };
     }
@@ -564,6 +652,7 @@ public class ExecutionResult
     public List<CompilationError>? Errors { get; set; }
     public List<string>? Columns { get; set; }
     public List<Dictionary<string, object?>>? Rows { get; set; }
+    public string? RichJson { get; set; }
     public List<CapturedQuery>? CapturedQueries { get; set; }
 
     /// <summary>Full SQL text for the Monaco viewer, joining all captured queries.</summary>

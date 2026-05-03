@@ -102,6 +102,38 @@ pre {
     background: #555;
 }
 
+/* ── JSON Tree Viewer ─────────────────────────────────────────── */
+.json-tree-viewer {
+    font-family: 'Cascadia Code', 'Fira Code', Consolas, monospace;
+    font-size: 0.78rem;
+    line-height: 1.6;
+    color: #1e1e1e;
+    --json-string-color: #a31515;
+    --json-number-color: #098658;
+    --json-bool-color: #0000ff;
+    --json-null-color: #808080;
+}
+
+.json-tree-viewer .json-row {
+    padding-top: 1px;
+    padding-bottom: 1px;
+    border-radius: 3px;
+    transition: background 0.1s;
+}
+
+.json-tree-viewer .json-row:hover {
+    background: rgba(0, 0, 0, 0.04);
+}
+
+.json-tree-viewer .json-key {
+    color: #9b0076;
+    font-weight: 500;
+}
+
+.json-tree-viewer .json-bracket {
+    color: #808080;
+}
+
 /* SQL viewer — query highlight on badge hover */
 .monaco-editor .sql-highlight-range {
     background: rgba(86, 156, 214, 0.18) !important;
