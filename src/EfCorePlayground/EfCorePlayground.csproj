@@ -79,24 +79,17 @@
   </ItemGroup>
   <ItemGroup>
     <_ContentIncludedByDefault Remove="wwwroot\css\app.css" />
-    <_ContentIncludedByDefault Remove="wwwroot\ref\manifest.txt" />
-    <_ContentIncludedByDefault Remove="wwwroot\ref\netstandard.bin" />
-    <_ContentIncludedByDefault Remove="wwwroot\ref\System.Collections.bin" />
-    <_ContentIncludedByDefault Remove="wwwroot\ref\System.Collections.Concurrent.bin" />
-    <_ContentIncludedByDefault Remove="wwwroot\ref\System.ComponentModel.Annotations.bin" />
-    <_ContentIncludedByDefault Remove="wwwroot\ref\System.ComponentModel.Primitives.bin" />
-    <_ContentIncludedByDefault Remove="wwwroot\ref\System.ComponentModel.TypeConverter.bin" />
-    <_ContentIncludedByDefault Remove="wwwroot\ref\System.Console.bin" />
-    <_ContentIncludedByDefault Remove="wwwroot\ref\System.Linq.bin" />
-    <_ContentIncludedByDefault Remove="wwwroot\ref\System.Linq.Expressions.bin" />
-    <_ContentIncludedByDefault Remove="wwwroot\ref\System.Linq.Queryable.bin" />
-    <_ContentIncludedByDefault Remove="wwwroot\ref\System.ObjectModel.bin" />
-    <_ContentIncludedByDefault Remove="wwwroot\ref\System.Runtime.bin" />
-    <_ContentIncludedByDefault Remove="wwwroot\ref\System.Runtime.InteropServices.bin" />
-    <_ContentIncludedByDefault Remove="wwwroot\ref\System.Text.Json.bin" />
-    <_ContentIncludedByDefault Remove="wwwroot\ref\System.Threading.bin" />
-    <_ContentIncludedByDefault Remove="wwwroot\ref\System.Threading.Tasks.bin" />
-    <_ContentIncludedByDefault Remove="wwwroot\ref\System.Threading.Tasks.Extensions.bin" />
+    <!-- Remove ref/*.bin from auto-detected content to avoid asset fingerprinting.
+         They are re-added below as explicit Content so they ARE published. -->
+    <Content Remove="wwwroot\ref\**" />
+  </ItemGroup>
+
+  <!-- Explicitly include ref/*.bin and manifest.txt as static content for publish.
+       Using *.bin (not *.dll) avoids the WASM ManagedToNativeGenerator scanner issue.
+       Fingerprint="false" preserves the exact filename so HTTP requests don't break. -->
+  <ItemGroup>
+    <Content Include="wwwroot\ref\manifest.txt" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" Fingerprint="false" />
+    <Content Include="wwwroot\ref\*.bin" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" Fingerprint="false" />
   </ItemGroup>
 
 </Project>

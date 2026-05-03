@@ -9,6 +9,8 @@
 //       [<EntityFrameworkCore.Projectables.Generator.dll path>]
 
 using System.Reflection;
+using System.Reflection.Metadata;
+using System.Reflection.PortableExecutable;
 using System.Security.Cryptography;
 using System.Text;
 using EfCorePlayground.Models;
@@ -213,6 +215,17 @@ static void CopyBclRefAssemblies(string outputDir, string efDllPath)
             continue;
         }
 
+        // Only copy PURE TypeForwardedTo facades (0 direct TypeDef rows).
+        // Desktop implementations (System.Collections.dll, System.Linq.dll, …) define types
+        // directly under b03f5f7f11d50a3a — including them alongside WASM CoreLib (which also
+        // defines those types under 7cec85d7bea7798e) causes CS0433 in Roslyn.
+        // Pure facades just emit TypeForwardedTo → no duplicate definitions.
+        if (!IsFacadeAssembly(srcPath))
+        {
+            Console.WriteLine($"[Precompiler] REF   SKIP  {name}.dll (not a pure TypeForwardedTo facade — desktop implementation; WASM AppDomain version will be used instead)");
+            continue;
+        }
+
         try
         {
             File.Copy(srcPath, destPath, overwrite: true);
@@ -228,6 +241,34 @@ static void CopyBclRefAssemblies(string outputDir, string efDllPath)
     // Write manifest so the WASM service knows which files are available
     File.WriteAllLines(Path.Combine(outputDir, "manifest.txt"), copied);
     Console.WriteLine($"[Precompiler] REF   manifest.txt written ({copied.Count} entries).");
+}
+
+/// <summary>
+/// Returns <c>true</c> when the assembly at <paramref name="path"/> is a pure
+/// TypeForwardedTo facade — i.e. its TypeDef table contains at most the implicit
+/// &lt;Module&gt; row and no actual named types are defined directly.
+///
+/// Such facades are safe to use alongside System.Private.CoreLib in Roslyn because
+/// they merely redirect type lookups via TypeForwardedTo without creating duplicate
+/// definitions (which would trigger CS0433).
+/// </summary>
+static bool IsFacadeAssembly(string path)
+{
+    try
+    {
+        using var fs = File.OpenRead(path);
+        using var peReader = new PEReader(fs);
+        if (!peReader.HasMetadata) return false;
+
+        var mr = peReader.GetMetadataReader();
+        // TypeDefinitionTable row 1 is always the implicit <Module> descriptor.
+        // A pure facade has NO additional rows (count == 1 or 0).
+        return mr.TypeDefinitions.Count <= 1;
+    }
+    catch
+    {
+        return false; // can't read → treat as non-facade (safe default: skip)
+    }
 }
 
 

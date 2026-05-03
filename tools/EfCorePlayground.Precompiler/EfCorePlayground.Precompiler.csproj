@@ -10,6 +10,7 @@
   <ItemGroup>
     <!-- Same versions as the main project so the compiled DLLs resolve correctly at WASM runtime -->
     <PackageReference Include="Microsoft.CodeAnalysis.CSharp" Version="5.0.0" />
+    <PackageReference Include="System.Reflection.Metadata" Version="10.0.7" />
     <PackageReference Include="Microsoft.EntityFrameworkCore" Version="10.0.5" />
     <PackageReference Include="Npgsql.EntityFrameworkCore.PostgreSQL" Version="10.0.1" />
     <PackageReference Include="EntityFrameworkCore.Projectables" Version="6.0.3" />

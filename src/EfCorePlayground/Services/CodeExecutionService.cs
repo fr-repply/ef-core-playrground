@@ -1,6 +1,7 @@
 using System.Collections;
 using System.Reflection;
 using System.Reflection.Metadata;
+using System.Reflection.PortableExecutable;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -347,62 +348,33 @@ public class CodeExecutionService
     // ──────────────────────────────────────────────────────────────────
 
     /// <summary>
-    /// Builds the full list of Roslyn metadata references used for user-code compilation.
+    /// Builds a full set of Roslyn metadata references for user-code compilation.
     ///
-    /// Strategy (two-tier):
-    ///  1. BCL types  → loaded from <c>wwwroot/ref/*.bin</c>.  These are the runtime
-    ///     TypeForwardedTo facade DLLs (e.g. System.Runtime ~44 KB, NOT the SDK ref pack
-    ///     ~862 KB).  Each facade TypeForwards every type to System.Private.CoreLib so Roslyn
-    ///     resolves to one canonical definition — no CS0433.  They are generated at build time
-    ///     by the Precompiler from the WASM build-output DLLs.
-    ///  2. Non-BCL types (EF Core, Projectables, app models, …) + System.Private.CoreLib →
-    ///     extracted directly from in-process runtime assemblies via TryGetRawMetadata.
+    /// Root cause of CS0009 in WasmBuildNative=true:
+    ///   Assembly.TryGetRawMetadata() returns AOT-compiled native WASM bytecode (a valid PE
+    ///   file but without a COR/CLI header).  Roslyn accepts the bytes at reference creation
+    ///   time (lazy validation), then emits CS0009 for every such reference when it tries to
+    ///   read the metadata tables — effectively providing zero usable references.
     ///
-    /// Why CoreLib MUST be included alongside the facade refs:
-    ///   In WASM publish mode the IL linker rewrites type references in app assemblies to use
-    ///   System.Private.CoreLib/7cec85d7bea7798e directly.  The facade System.Runtime.bin
-    ///   TypeForwards to CoreLib, so Roslyn follows the chain and finds the single definition
-    ///   in CoreLib — no CS0433.  If CoreLib were absent, those IL-linked references would be
-    ///   unresolvable → CS0012.
+    /// Fix — load every assembly via HTTP from _framework/:
+    ///   The _framework/ directory contains the original managed IL .dll files alongside the
+    ///   native dotnet.native.wasm.  These are valid managed PEs (have a CLI header) and are
+    ///   exactly what Roslyn needs.  We use blazor.boot.json to discover the exact URLs
+    ///   (which may be fingerprinted in publish mode) and load all of them in parallel.
+    ///   Each loaded file is validated with PEReader.HasMetadata to silently skip any
+    ///   native-only artifacts.
     ///
-    /// The BCL refs are fetched once and cached in a static field for all subsequent compilations.
+    /// The result is cached for all subsequent compilations.
     /// </summary>
     private async Task<List<MetadataReference>> GetMetadataReferencesAsync()
     {
-        // ── Step 1: load (and cache) BCL reference assemblies from wwwroot/ref/*.bin ──
         if (_cachedBclRefs == null)
         {
             await _refLoadLock.WaitAsync();
             try
             {
-                if (_cachedBclRefs == null) // double-checked
-                {
-                    var bclRefs = new List<MetadataReference>();
-                    try
-                    {
-                        var manifest = await _http.GetStringAsync("ref/manifest.txt");
-                        foreach (var line in manifest.Split('\n', StringSplitOptions.RemoveEmptyEntries))
-                        {
-                            var name = line.Trim();
-                            if (string.IsNullOrEmpty(name)) continue;
-                            try
-                            {
-                                var bytes = await _http.GetByteArrayAsync($"ref/{name}.bin");
-                                bclRefs.Add(MetadataReference.CreateFromImage(bytes));
-                            }
-                            catch (Exception ex)
-                            {
-                                Console.Error.WriteLine($"[Refs] Skip ref/{name}.bin: {ex.Message}");
-                            }
-                        }
-                        Console.WriteLine($"[Refs] Loaded {bclRefs.Count} BCL reference assemblies from wwwroot/ref/.");
-                    }
-                    catch (Exception ex)
-                    {
-                        Console.Error.WriteLine($"[Refs] Could not load BCL refs: {ex.Message}");
-                    }
-                    _cachedBclRefs = bclRefs.ToArray();
-                }
+                if (_cachedBclRefs == null) // double-checked locking
+                    _cachedBclRefs = await BuildAllFrameworkRefsAsync();
             }
             finally
             {
@@ -410,92 +382,166 @@ public class CodeExecutionService
             }
         }
 
-        var references = new List<MetadataReference>(_cachedBclRefs);
+        return new List<MetadataReference>(_cachedBclRefs);
+    }
 
-        // ── Step 2: runtime assemblies for non-BCL packages + System.Private.CoreLib ─────
-        // The bclNames set lists assemblies already covered by ref/*.bin (TypeForwardedTo
-        // facades); adding them AGAIN from the runtime would double-register the same assembly
-        // identity on the Roslyn reference list (harmless but wasteful — skip them).
-        // System.Private.CoreLib is intentionally NOT in this exclusion list: CoreLib must
-        // come from the WASM AppDomain so Roslyn can resolve the TypeForwardedTo chains from
-        // the facade refs down to the single canonical CoreLib definition.
-        var bclNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
-        {
-            "System.Runtime",
-            "System.Collections",
-            "System.Collections.Concurrent",
-            "System.Linq",
-            "System.Linq.Expressions",
-            "System.Linq.Queryable",
-            "System.Threading",
-            "System.Threading.Tasks",
-            "System.Threading.Tasks.Extensions",
-            "System.ComponentModel.Primitives",
-            "System.ComponentModel.Annotations",
-            "System.ComponentModel.TypeConverter",
-            "System.Text.Json",
-            "System.Console",
-            "System.ObjectModel",
-            "System.Runtime.InteropServices",
-            "netstandard",
-            // legacy aliases
-            "mscorlib",
-        };
+    /// <summary>
+    /// Discovers all assembly URLs from <c>_framework/blazor.boot.json</c> then loads each
+    /// assembly in parallel from <c>_framework/</c>, filtering out any non-managed PE file.
+    /// </summary>
+    private async Task<MetadataReference[]> BuildAllFrameworkRefsAsync()
+    {
+        // 1. Discover assembly URLs (fingerprinted in publish mode)
+        var urls = await DiscoverFrameworkAssemblyUrlsAsync();
+        Console.WriteLine($"[Refs] {urls.Count} assembly URLs to fetch from _framework/");
 
-        // Pinned assemblies — always added (then filtered by bclNames below).
-        // typeof(object).Assembly = System.Private.CoreLib — kept because it is NOT in bclNames;
-        // this ensures WASM-linked assemblies that reference CoreLib identity resolve correctly.
-        var pinned = new[]
-        {
-            typeof(object).Assembly,                                                    // System.Private.CoreLib
-            typeof(Microsoft.EntityFrameworkCore.DbContext).Assembly,                  // EF Core
-            typeof(EntityFrameworkCore.Projectables.ProjectableAttribute).Assembly,    // Projectables
-            typeof(EfCorePlayground.Models.Blog).Assembly,                             // App models
-            Assembly.GetExecutingAssembly(),
-        };
+        // 2. Load in parallel — they are already cached in the browser since the WASM runtime
+        //    downloaded them at startup.
+        var loadTasks = urls.Select(url => LoadManagedRefAsync(url));
+        var results = await Task.WhenAll(loadTasks);
 
-        var byName = new Dictionary<string, Assembly>(StringComparer.OrdinalIgnoreCase);
-        foreach (var a in pinned.Where(a => !a.IsDynamic))
+        var refs = results.OfType<MetadataReference>().ToArray();
+        Console.WriteLine($"[Refs] {refs.Length}/{urls.Count} managed refs ready (rest were native/invalid)");
+        return refs;
+    }
+
+    /// <summary>
+    /// Tries to load <paramref name="url"/> as a managed assembly metadata reference.
+    /// Returns <c>null</c> (silently) if the download fails or the file is not a managed PE.
+    /// </summary>
+    private async Task<MetadataReference?> LoadManagedRefAsync(string url)
+    {
+        try
         {
-            var n = a.GetName().Name;
-            if (n != null) byName.TryAdd(n, a);
+            var bytes = await _http.GetByteArrayAsync(url);
+            return IsManagedPe(bytes) ? MetadataReference.CreateFromImage(bytes) : null;
         }
-        foreach (var a in AppDomain.CurrentDomain.GetAssemblies().Where(a => !a.IsDynamic))
+        catch
         {
-            var n = a.GetName().Name;
-            if (n != null) byName.TryAdd(n, a);
+            return null;
         }
+    }
 
-        // Remove BCL names — already covered by ref/*.bin
-        foreach (var name in bclNames) byName.Remove(name);
-
-        foreach (var assembly in byName.Values)
+    /// <summary>
+    /// Reads <c>_framework/blazor.boot.json</c> (or <c>dotnet.boot.json</c>) to get the
+    /// exact published filenames of all framework assemblies, then returns their
+    /// <c>_framework/{name}</c> URLs.  Falls back to a hardcoded list on failure.
+    /// </summary>
+    private async Task<List<string>> DiscoverFrameworkAssemblyUrlsAsync()
+    {
+        // Try standard boot config locations used by Blazor WASM (.NET 8/9/10)
+        foreach (var bootPath in new[] { "_framework/blazor.boot.json", "_framework/dotnet.boot.json" })
         {
             try
             {
-                unsafe
+                var json = await _http.GetStringAsync(bootPath);
+                var urls = ParseAssemblyUrlsFromBootJson(json);
+                if (urls.Count > 0)
                 {
-                    if (assembly.TryGetRawMetadata(out byte* blob, out int length))
-                    {
-                        references.Add(AssemblyMetadata
-                            .Create(ModuleMetadata.CreateFromMetadata((nint)blob, length))
-                            .GetReference());
-                        continue;
-                    }
+                    Console.WriteLine($"[Refs] boot.json @ {bootPath}: {urls.Count} assemblies");
+                    return urls;
                 }
             }
-            catch { /* fall through */ }
-
-            try
-            {
-                if (!string.IsNullOrEmpty(assembly.Location))
-                    references.Add(MetadataReference.CreateFromFile(assembly.Location));
-            }
-            catch { /* skip */ }
+            catch { /* try next location */ }
         }
 
-        return references;
+        // Fallback: known-good list when boot.json is unavailable
+        Console.Error.WriteLine("[Refs] blazor.boot.json not found — falling back to hardcoded assembly list");
+        return GetFallbackAssemblyUrls();
     }
+
+    private static List<string> ParseAssemblyUrlsFromBootJson(string json)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(json);
+            var root = doc.RootElement;
+
+            // Standard Blazor WASM format: { "resources": { "assembly": { "Foo.dll": "sha256-..." } } }
+            if (root.TryGetProperty("resources", out var resources) &&
+                resources.TryGetProperty("assembly", out var assemblies))
+            {
+                return assemblies.EnumerateObject()
+                    .Select(e => e.Name)
+                    .Where(n => n.EndsWith(".dll", StringComparison.OrdinalIgnoreCase))
+                    .Select(n => $"_framework/{n}")
+                    .ToList();
+            }
+        }
+        catch { /* malformed JSON */ }
+
+        return new List<string>();
+    }
+
+    /// <summary>
+    /// Returns <c>true</c> when <paramref name="bytes"/> is a managed .NET PE (has a CLI/COR header).
+    /// Rejects native WASM PE files (valid PE, no managed metadata) to prevent CS0009.
+    /// Uses an unsafe pointer construction to avoid copying the byte array.
+    /// </summary>
+    private static bool IsManagedPe(byte[] bytes)
+    {
+        if (bytes.Length < 64 || bytes[0] != 0x4D || bytes[1] != 0x5A)
+            return false;
+        try
+        {
+            unsafe
+            {
+                fixed (byte* p = bytes)
+                {
+                    using var pe = new PEReader(p, bytes.Length);
+                    return pe.HasMetadata;
+                }
+            }
+        }
+        catch { return false; }
+    }
+
+    /// <summary>
+    /// Fallback assembly list used when <c>blazor.boot.json</c> is unavailable.
+    /// Covers BCL + EF Core + Npgsql + Projectables + app assembly.
+    /// </summary>
+    private static List<string> GetFallbackAssemblyUrls() => new()
+    {
+        // ── BCL ─────────────────────────────────────────────────────────────────
+        "_framework/System.Private.CoreLib.dll",
+        "_framework/System.Runtime.dll",
+        "_framework/System.Collections.dll",
+        "_framework/System.Collections.Concurrent.dll",
+        "_framework/System.Linq.dll",
+        "_framework/System.Linq.Expressions.dll",
+        "_framework/System.Linq.Queryable.dll",
+        "_framework/System.Threading.dll",
+        "_framework/System.Threading.Tasks.dll",
+        "_framework/System.Threading.Tasks.Extensions.dll",
+        "_framework/System.Text.Json.dll",
+        "_framework/System.ComponentModel.Annotations.dll",
+        "_framework/System.ComponentModel.Primitives.dll",
+        "_framework/System.ComponentModel.TypeConverter.dll",
+        "_framework/System.Console.dll",
+        "_framework/System.ObjectModel.dll",
+        "_framework/System.Runtime.InteropServices.dll",
+        "_framework/netstandard.dll",
+        // ── EF Core & extensions ─────────────────────────────────────────────
+        "_framework/Microsoft.EntityFrameworkCore.dll",
+        "_framework/Microsoft.EntityFrameworkCore.Relational.dll",
+        "_framework/Microsoft.Extensions.Caching.Abstractions.dll",
+        "_framework/Microsoft.Extensions.Caching.Memory.dll",
+        "_framework/Microsoft.Extensions.Configuration.Abstractions.dll",
+        "_framework/Microsoft.Extensions.DependencyInjection.Abstractions.dll",
+        "_framework/Microsoft.Extensions.DependencyInjection.dll",
+        "_framework/Microsoft.Extensions.Logging.Abstractions.dll",
+        "_framework/Microsoft.Extensions.Logging.dll",
+        "_framework/Microsoft.Extensions.Options.dll",
+        "_framework/Microsoft.Extensions.Primitives.dll",
+        // ── Npgsql ───────────────────────────────────────────────────────────
+        "_framework/Npgsql.dll",
+        "_framework/Npgsql.EntityFrameworkCore.PostgreSQL.dll",
+        // ── Projectables ─────────────────────────────────────────────────────
+        "_framework/EntityFrameworkCore.Projectables.dll",
+        "_framework/EntityFrameworkCore.Projectables.Abstractions.dll",
+        // ── App ──────────────────────────────────────────────────────────────
+        "_framework/EfCorePlayground.dll",
+    };
 
 
     // ──────────────────────────────────────────────────────────────────
