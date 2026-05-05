@@ -116,7 +116,7 @@ public class CodeExecutionService
         }
         catch (Exception ex)
         {
-            Console.Error.WriteLine($"[Warmup] Roslyn warm-up failed (best-effort): {ex.GetType().Name}: {ex.Message}");
+            Console.WriteLine($"[Warmup] Roslyn warm-up failed (best-effort): {ex.GetType().Name}: {ex.Message}");
         }
     }
 
@@ -126,7 +126,7 @@ public class CodeExecutionService
     {
         _compilationCache.Clear();
         try { await _jsRuntime.InvokeVoidAsync("efCacheInterop.clear"); }
-        catch (Exception ex) { Console.Error.WriteLine($"[Cache] clear failed: {ex.Message}"); }
+        catch (Exception ex) { Console.WriteLine($"[Cache] clear failed: {ex.Message}"); }
     }
 
     /// <summary>
@@ -148,7 +148,7 @@ public class CodeExecutionService
         }
         catch (Exception ex)
         {
-            Console.Error.WriteLine($"[Cache] LoadCacheFromStorageAsync failed: {ex.Message}");
+            Console.WriteLine($"[Cache] LoadCacheFromStorageAsync failed: {ex.Message}");
         }
     }
 
@@ -182,7 +182,7 @@ public class CodeExecutionService
         }
         catch (Exception ex)
         {
-            Console.Error.WriteLine($"[Cache] SaveToStorageAsync failed: {ex.Message}");
+            Console.WriteLine($"[Cache] SaveToStorageAsync failed: {ex.Message}");
         }
     }
 
@@ -528,7 +528,7 @@ public class CodeExecutionService
         }
 
         // Fallback: known-good list when boot.json is unavailable
-        Console.Error.WriteLine("[Refs] blazor.boot.json not found — falling back to hardcoded assembly list");
+        Console.WriteLine("[Refs] blazor.boot.json not found — falling back to hardcoded assembly list");
         return GetFallbackAssemblyUrls();
     }
 

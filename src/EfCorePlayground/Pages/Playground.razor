@@ -101,7 +101,7 @@
 
             // Restore previously compiled assemblies from localStorage (fast, no Roslyn involved)
             try { await executionService.LoadCacheFromStorageAsync(); }
-            catch (Exception ex) { Console.Error.WriteLine($"[Init] Cache load failed: {ex.Message}"); }
+            catch (Exception ex) { Console.WriteLine($"[Init] Cache load failed: {ex.Message}"); }
 
             // Warm up Roslyn in the background: JIT-initialise its internals and pre-load all
             // metadata references so the first real compilation is significantly faster.

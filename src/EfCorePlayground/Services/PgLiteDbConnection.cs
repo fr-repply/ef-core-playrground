@@ -201,7 +201,7 @@ public class PgLiteDbCommand : DbCommand
         int totalRows = 0, lastCols = 0;
         foreach (var (stmtSql, stmtParams) in statements)
         {
-            Console.Error.WriteLine($"[PgLite] BATCH STMT: {stmtSql}");
+            Console.WriteLine($"[PgLite] BATCH STMT: {stmtSql}");
             var r = await js.InvokeAsync<JsonElement>(
                 "pgliteInterop.query", cancellationToken, stmtSql, stmtParams);
             if (r.TryGetProperty("rows", out var re)) totalRows += re.GetArrayLength();
@@ -320,10 +320,10 @@ public class PgLiteDbCommand : DbCommand
         var matches = NamedParamRegex.Matches(sql);
 
         // DEBUG — remove once confirmed working
-        Console.Error.WriteLine($"[PgLite] RAW SQL: {sql}");
-        Console.Error.WriteLine($"[PgLite] Named param matches: {matches.Count}");
+        Console.WriteLine($"[PgLite] RAW SQL: {sql}");
+        Console.WriteLine($"[PgLite] Named param matches: {matches.Count}");
         for (int i = 0; i < _parameters.Count; i++)
-            Console.Error.WriteLine($"[PgLite]   param[{i}] name='{((DbParameter)_parameters[i]!).ParameterName}' value='{valuesInOrder[i]}'");
+            Console.WriteLine($"[PgLite]   param[{i}] name='{((DbParameter)_parameters[i]!).ParameterName}' value='{valuesInOrder[i]}'");
 
         if (matches.Count == 0)
         {
@@ -351,7 +351,7 @@ public class PgLiteDbCommand : DbCommand
             .Select(n => paramValues.TryGetValue(n, out var v) ? v : null)
             .ToArray();
 
-        Console.Error.WriteLine($"[PgLite] TRANSFORMED SQL: {sql}");
+        Console.WriteLine($"[PgLite] TRANSFORMED SQL: {sql}");
         return (sql, namedValues);
     }
 
