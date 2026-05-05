@@ -166,6 +166,17 @@ Rafraîchi automatiquement après chaque exécution réussie via `dataViewerPane
 - Les assemblies pré-compilées sont servies comme assets statiques Blazor WASM
 - `Assembly.TryGetRawMetadata()` retourne du bytecode WASM natif en mode `WasmBuildNative=true` → ne jamais l'utiliser pour les références Roslyn, toujours passer par HTTP `_framework/`
 
+### Références Roslyn — assemblies managées (`wwwroot/ref/*.bin`)
+
+En mode `WasmBuildNative=true` (obligatoire pour ce projet), les fichiers sous `_framework/` sont des modules Webcil (`.wasm`), **pas** des PE managés.
+Le Precompiler copie les DLLs managées du répertoire de build (`bin/Debug/net10.0/`) vers `wwwroot/ref/` sous l'extension `.bin` pour les servir comme assets statiques.
+
+**`System.Private.CoreLib` DOIT être inclus** dans les refs — les facades BCL (`System.Runtime`, `System.Threading.Tasks`…) utilisent `TypeForwardedTo` pour rediriger les types vers CoreLib. Sans lui, Roslyn ne peut pas résoudre les types fondamentaux (`int`, `string`, `Task<>`) et émet des erreurs CS0012/CS0518.
+
+Le fichier `ref/manifest.txt` liste les assemblies disponibles. Le `CodeExecutionService` charge les refs depuis ce répertoire en priorité, puis tombe en fallback sur `_framework/` (qui ne fonctionne qu'en mode non-natif).
+
+Pour charger les assemblies Webcil depuis `_framework/` (approche alternative utilisée par [FluentMigrator.Repl.Poc](https://github.com/PhenX/FluentMigrator.Repl.Poc)), il faut implémenter un convertisseur Webcil→PE.
+
 ---
 
 ## Points d'entrée

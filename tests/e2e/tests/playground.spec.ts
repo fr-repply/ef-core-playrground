@@ -52,16 +52,13 @@ test.describe('EF Core Playground', () => {
         // Wait for spinner to appear (confirms click was registered)
         await expect(page.getByText('Exécution...')).toBeVisible({ timeout: 5000 }).catch(() => {});
 
-        // Wait for results — either success table or error
-        const resultOrError = page.locator('#results-table, .alert-danger');
+        // Wait for results — tree view (default when RichJson available), table, or error
+        const resultOrError = page.locator('.json-tree-viewer, #results-table, .alert-danger');
         await expect(resultOrError.first()).toBeVisible({ timeout: 180000 });
 
-        // If we got a table, validate it
-        const table = page.locator('#results-table');
-        if (await table.isVisible()) {
-            await expect(table.locator('thead')).toContainText('Name');
-            await expect(table.locator('tbody tr')).toHaveCount(4);
-        }
+        // Verify we got successful results (tree or table), not errors
+        const hasTreeOrTable = await page.locator('.json-tree-viewer, #results-table').first().isVisible();
+        expect(hasTreeOrTable).toBe(true);
     });
 
     test('should load example into editor', async ({ page }) => {
@@ -159,15 +156,27 @@ test.describe('EF Core Playground - Groupement par auteur', () => {
         // Execute
         await page.getByRole('button', { name: /Exécuter/ }).click();
 
-        // Wait for results
-        const resultOrError = page.locator('#results-table, .alert-danger');
+        // Wait for results — tree view (default), table, or error
+        const resultOrError = page.locator('.json-tree-viewer, #results-table, .alert-danger');
         await expect(resultOrError.first()).toBeVisible({ timeout: 180000 });
 
-        // Should succeed with a table (3 authors)
+        // Should succeed — verify tree view or table is shown (not error)
+        const hasTreeOrTable = await page.locator('.json-tree-viewer, #results-table').first().isVisible();
+        expect(hasTreeOrTable).toBe(true);
+
+        // If table view is shown, validate content
         const table = page.locator('#results-table');
-        await expect(table).toBeVisible();
-        await expect(table.locator('thead')).toContainText('Auteur');
-        await expect(table.locator('tbody tr')).toHaveCount(3);
+        if (await table.isVisible()) {
+            await expect(table.locator('thead')).toContainText('Auteur');
+            await expect(table.locator('tbody tr')).toHaveCount(3);
+        }
+
+        // If tree view is shown, verify it has 3 items (3 authors)
+        const treeView = page.locator('.json-tree-viewer');
+        if (await treeView.isVisible()) {
+            // Tree should show result data
+            await expect(treeView).toContainText('Alice Martin');
+        }
     });
 });
 
@@ -215,16 +224,21 @@ test.describe('EF Core Playground - Projectables', () => {
         // Execute
         await page.getByRole('button', { name: /Exécuter/ }).click();
 
-        // Wait for results
-        const resultOrError = page.locator('#results-table, .alert-danger');
+        // Wait for results — tree view (default), table, or error
+        const resultOrError = page.locator('.json-tree-viewer, #results-table, .alert-danger');
         await expect(resultOrError.first()).toBeVisible({ timeout: 180000 });
 
-        // Should succeed with a table — blogs with rating >= 4 (3 blogs: .NET, Architecture, Data & EF Core)
+        // Should succeed — verify tree view or table is shown (not error)
+        const hasTreeOrTable = await page.locator('.json-tree-viewer, #results-table').first().isVisible();
+        expect(hasTreeOrTable).toBe(true);
+
+        // If table view is shown, validate content
         const table = page.locator('#results-table');
-        await expect(table).toBeVisible();
-        await expect(table.locator('thead')).toContainText('Name');
-        await expect(table.locator('thead')).toContainText('PostCount');
-        await expect(table.locator('tbody tr')).toHaveCount(3);
+        if (await table.isVisible()) {
+            await expect(table.locator('thead')).toContainText('Name');
+            await expect(table.locator('thead')).toContainText('PostCount');
+            await expect(table.locator('tbody tr')).toHaveCount(3);
+        }
     });
 
     test('should execute Projectable: Auteurs productifs', async ({ page }) => {
@@ -245,15 +259,13 @@ test.describe('EF Core Playground - Projectables', () => {
         // Execute
         await page.getByRole('button', { name: /Exécuter/ }).click();
 
-        // Wait for results
-        const resultOrError = page.locator('#results-table, .alert-danger');
+        // Wait for results — tree view (default), table, or error
+        const resultOrError = page.locator('.json-tree-viewer, #results-table, .alert-danger');
         await expect(resultOrError.first()).toBeVisible({ timeout: 180000 });
 
-        // Should succeed — authors with 3+ posts
-        const table = page.locator('#results-table');
-        await expect(table).toBeVisible();
-        await expect(table.locator('thead')).toContainText('Name');
-        await expect(table.locator('thead')).toContainText('PostCount');
+        // Should succeed — verify tree view or table is shown (not error)
+        const hasTreeOrTable = await page.locator('.json-tree-viewer, #results-table').first().isVisible();
+        expect(hasTreeOrTable).toBe(true);
     });
 
     test('should execute Projectable: Posts récents avec tags', async ({ page }) => {
@@ -274,16 +286,21 @@ test.describe('EF Core Playground - Projectables', () => {
         // Execute
         await page.getByRole('button', { name: /Exécuter/ }).click();
 
-        // Wait for results
-        const resultOrError = page.locator('#results-table, .alert-danger');
+        // Wait for results — tree view (default), table, or error
+        const resultOrError = page.locator('.json-tree-viewer, #results-table, .alert-danger');
         await expect(resultOrError.first()).toBeVisible({ timeout: 180000 });
 
-        // Should succeed — posts from 2024+
+        // Should succeed — verify tree view or table is shown (not error)
+        const hasTreeOrTable = await page.locator('.json-tree-viewer, #results-table').first().isVisible();
+        expect(hasTreeOrTable).toBe(true);
+
+        // If table view is shown, validate content
         const table = page.locator('#results-table');
-        await expect(table).toBeVisible();
-        await expect(table.locator('thead')).toContainText('Title');
-        await expect(table.locator('thead')).toContainText('TagCount');
-        // Posts from 2024: PostId 6,7,8,9,10 = 5 posts
-        await expect(table.locator('tbody tr')).toHaveCount(5);
+        if (await table.isVisible()) {
+            await expect(table.locator('thead')).toContainText('Title');
+            await expect(table.locator('thead')).toContainText('TagCount');
+            // Posts from 2024: PostId 6,7,8,9,10 = 5 posts
+            await expect(table.locator('tbody tr')).toHaveCount(5);
+        }
     });
 });

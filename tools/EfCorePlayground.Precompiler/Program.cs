@@ -159,9 +159,13 @@ static void CopyBclRefAssemblies(string outputDir, string efDllPath)
     var wanted = new[]
     {
         // ── BCL ──────────────────────────────────────────────────────────────
-        // System.Private.CoreLib is NOT included — the WASM runtime has it in memory.
-        // Including it causes type identity conflicts between the compilation-time
-        // and runtime versions of CoreLib.
+        // System.Private.CoreLib MUST be included — the BCL facade assemblies
+        // (System.Runtime, System.Threading.Tasks, etc.) use TypeForwardedTo to
+        // redirect all core types to CoreLib.  Without it Roslyn cannot resolve
+        // basic types (int, string, Task<>, etc.) → CS0012 / CS0518 at runtime.
+        // We copy the managed IL version from the WASM build output (not the
+        // desktop runtime), so it matches the WASM runtime exactly.
+        "System.Private.CoreLib",
         "System.Runtime",
         "System.Collections",
         "System.Collections.Concurrent",
