@@ -391,7 +391,15 @@ public class CodeExecutionService
             try
             {
                 if (_cachedBclRefs == null) // double-checked locking
-                    _cachedBclRefs = await BuildAllFrameworkRefsAsync();
+                {
+                    var refs = await BuildAllFrameworkRefsAsync();
+                    // Only cache if we actually loaded refs — avoids permanently caching
+                    // an empty result when HTTP loading fails (e.g. dev mode with native WASM).
+                    if (refs.Length > 0)
+                        _cachedBclRefs = refs;
+                    else
+                        return new List<MetadataReference>();
+                }
             }
             finally
             {
@@ -403,23 +411,73 @@ public class CodeExecutionService
     }
 
     /// <summary>
-    /// Discovers all assembly URLs from <c>_framework/blazor.boot.json</c> then loads each
-    /// assembly in parallel from <c>_framework/</c>, filtering out any non-managed PE file.
+    /// Loads metadata references for Roslyn compilation.
+    /// Strategy (in order):
+    ///   1. <c>wwwroot/ref/manifest.txt</c> + <c>ref/*.bin</c> — pre-built managed DLLs
+    ///      from the WASM build output. Works in both dev and publish mode.
+    ///   2. <c>_framework/blazor.boot.json</c> → HTTP load — works in older .NET / publish mode
+    ///      where _framework/ still serves managed DLLs.
     /// </summary>
     private async Task<MetadataReference[]> BuildAllFrameworkRefsAsync()
     {
-        // 1. Discover assembly URLs (fingerprinted in publish mode)
+        // ── Strategy 1: Load from wwwroot/ref/ (pre-built by Precompiler) ────
+        var refRefs = await TryLoadFromRefDirectoryAsync();
+        if (refRefs.Length > 0)
+        {
+            Console.WriteLine($"[Refs] {refRefs.Length} managed refs loaded from ref/");
+            return refRefs;
+        }
+
+        // ── Strategy 2: Discover from _framework/ via boot.json ──────────────
         var urls = await DiscoverFrameworkAssemblyUrlsAsync();
         Console.WriteLine($"[Refs] {urls.Count} assembly URLs to fetch from _framework/");
 
-        // 2. Load in parallel — they are already cached in the browser since the WASM runtime
-        //    downloaded them at startup.
         var loadTasks = urls.Select(url => LoadManagedRefAsync(url));
         var results = await Task.WhenAll(loadTasks);
 
         var refs = results.OfType<MetadataReference>().ToArray();
         Console.WriteLine($"[Refs] {refs.Length}/{urls.Count} managed refs ready (rest were native/invalid)");
         return refs;
+    }
+
+    /// <summary>
+    /// Tries to load metadata references from <c>wwwroot/ref/manifest.txt</c> + <c>ref/*.bin</c>.
+    /// These are managed PE DLLs copied from the WASM build output by the Precompiler.
+    /// Returns empty array on failure.
+    /// </summary>
+    private async Task<MetadataReference[]> TryLoadFromRefDirectoryAsync()
+    {
+        try
+        {
+            var response = await _http.GetAsync("ref/manifest.txt", HttpCompletionOption.ResponseHeadersRead);
+            if (!response.IsSuccessStatusCode) return Array.Empty<MetadataReference>();
+
+            var manifest = await response.Content.ReadAsStringAsync();
+            var names = manifest.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+            if (names.Length == 0) return Array.Empty<MetadataReference>();
+
+            Console.WriteLine($"[Refs] ref/manifest.txt: {names.Length} assemblies listed");
+
+            var loadTasks = names.Select(async name =>
+            {
+                try
+                {
+                    var resp = await _http.GetAsync($"ref/{name}.bin", HttpCompletionOption.ResponseHeadersRead);
+                    if (!resp.IsSuccessStatusCode) return null;
+                    var bytes = await resp.Content.ReadAsByteArrayAsync();
+                    return IsManagedPe(bytes) ? MetadataReference.CreateFromImage(bytes) : null;
+                }
+                catch { return null; }
+            });
+
+            var results = await Task.WhenAll(loadTasks);
+            return results.OfType<MetadataReference>().ToArray();
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"[Refs] Failed to load from ref/: {ex.Message}");
+            return Array.Empty<MetadataReference>();
+        }
     }
 
     /// <summary>

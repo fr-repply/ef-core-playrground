@@ -152,11 +152,16 @@ return failed > 0 ? 1 : 0;
 /// </summary>
 static void CopyBclRefAssemblies(string outputDir, string efDllPath)
 {
-    // The ordered list of assemblies we want for Roslyn WASM compilation.
-    // System.Private.CoreLib itself is NOT listed here — the WASM runtime always has it in
-    // AppDomain; CodeExecutionService adds it via TryGetRawMetadata at runtime.
+    // All assemblies needed for Roslyn WASM compilation of user code.
+    // In .NET 10, _framework/ serves native .wasm files (not managed PEs), so we copy
+    // the managed DLLs from the build output to wwwroot/ref/ where the WASM runtime
+    // can fetch them via HTTP for Roslyn metadata references.
     var wanted = new[]
     {
+        // ── BCL ──────────────────────────────────────────────────────────────
+        // System.Private.CoreLib is NOT included — the WASM runtime has it in memory.
+        // Including it causes type identity conflicts between the compilation-time
+        // and runtime versions of CoreLib.
         "System.Runtime",
         "System.Collections",
         "System.Collections.Concurrent",
@@ -174,12 +179,34 @@ static void CopyBclRefAssemblies(string outputDir, string efDllPath)
         "System.ObjectModel",
         "System.Runtime.InteropServices",
         "netstandard",
+        // ── EF Core & extensions ─────────────────────────────────────────────
+        "Microsoft.EntityFrameworkCore",
+        "Microsoft.EntityFrameworkCore.Abstractions",
+        "Microsoft.EntityFrameworkCore.Relational",
+        "Microsoft.Extensions.Caching.Abstractions",
+        "Microsoft.Extensions.Caching.Memory",
+        "Microsoft.Extensions.Configuration.Abstractions",
+        "Microsoft.Extensions.DependencyInjection.Abstractions",
+        "Microsoft.Extensions.DependencyInjection",
+        "Microsoft.Extensions.Logging.Abstractions",
+        "Microsoft.Extensions.Logging",
+        "Microsoft.Extensions.Options",
+        "Microsoft.Extensions.Primitives",
+        // ── Npgsql ───────────────────────────────────────────────────────────
+        "Npgsql",
+        "Npgsql.EntityFrameworkCore.PostgreSQL",
+        // ── Projectables ─────────────────────────────────────────────────────
+        "EntityFrameworkCore.Projectables",
+        "EntityFrameworkCore.Projectables.Abstractions",
+        // ── App ──────────────────────────────────────────────────────────────
+        "EfCorePlayground",
     };
 
     Directory.CreateDirectory(outputDir);
 
     // ── 1. Build a lookup from the WASM build-output directory ───────────────
-    //    These are the exact TypeForwardedTo facade DLLs shipped with the app.
+    //    These are managed PE DLLs — the input to the WASM native compiler.
+    //    They form a consistent set safe to use together as Roslyn refs.
     var efDir = Path.GetDirectoryName(efDllPath) ?? "";
     var efDirByName = Directory.Exists(efDir)
         ? Directory.GetFiles(efDir, "*.dll")
@@ -190,7 +217,6 @@ static void CopyBclRefAssemblies(string outputDir, string efDllPath)
     Console.WriteLine($"[Precompiler] REF   efDir → {efDir} ({efDirByName.Count} DLLs)");
 
     // ── 2. Build a fallback lookup from this process's AppDomain assemblies ──
-    //    On desktop .NET these are the same TypeForwardedTo facades (shared framework).
     var runtimeByName = AppDomain.CurrentDomain.GetAssemblies()
         .Where(a => !a.IsDynamic && !string.IsNullOrEmpty(a.Location) && File.Exists(a.Location))
         .GroupBy(a => a.GetName().Name ?? "", StringComparer.OrdinalIgnoreCase)
@@ -202,7 +228,7 @@ static void CopyBclRefAssemblies(string outputDir, string efDllPath)
     {
         var destPath = Path.Combine(outputDir, name + ".bin"); // .bin avoids WASM P/Invoke scanner
 
-        // Priority: efDir → runtime AppDomain → skip (never use SDK ref pack)
+        // Priority: efDir (WASM build output — consistent set) → runtime AppDomain → skip
         string? srcPath = null;
         if (efDirByName.TryGetValue(name, out var efPath))
             srcPath = efPath;
@@ -215,14 +241,10 @@ static void CopyBclRefAssemblies(string outputDir, string efDllPath)
             continue;
         }
 
-        // Only copy PURE TypeForwardedTo facades (0 direct TypeDef rows).
-        // Desktop implementations (System.Collections.dll, System.Linq.dll, …) define types
-        // directly under b03f5f7f11d50a3a — including them alongside WASM CoreLib (which also
-        // defines those types under 7cec85d7bea7798e) causes CS0433 in Roslyn.
-        // Pure facades just emit TypeForwardedTo → no duplicate definitions.
-        if (!IsFacadeAssembly(srcPath))
+        // Verify it's a valid managed PE (has CLI metadata)
+        if (!IsManagedAssembly(srcPath))
         {
-            Console.WriteLine($"[Precompiler] REF   SKIP  {name}.dll (not a pure TypeForwardedTo facade — desktop implementation; WASM AppDomain version will be used instead)");
+            Console.WriteLine($"[Precompiler] REF   SKIP  {name}.dll (not a managed PE)");
             continue;
         }
 
@@ -241,6 +263,24 @@ static void CopyBclRefAssemblies(string outputDir, string efDllPath)
     // Write manifest so the WASM service knows which files are available
     File.WriteAllLines(Path.Combine(outputDir, "manifest.txt"), copied);
     Console.WriteLine($"[Precompiler] REF   manifest.txt written ({copied.Count} entries).");
+}
+
+/// <summary>
+/// Returns <c>true</c> when the file at <paramref name="path"/> is a valid managed PE
+/// with CLI metadata (as opposed to a native WASM module or corrupt file).
+/// </summary>
+static bool IsManagedAssembly(string path)
+{
+    try
+    {
+        using var fs = File.OpenRead(path);
+        using var peReader = new PEReader(fs);
+        return peReader.HasMetadata;
+    }
+    catch
+    {
+        return false;
+    }
 }
 
 /// <summary>
