@@ -627,9 +627,11 @@ public class CodeExecutionService
 
     private async Task<ExecutionResult> RunCompiledCode(Assembly assembly)
     {
+        Console.WriteLine("[RunCompiledCode] Step 1: init PGlite");
         // Initialize a fresh PGlite instance for each execution
         await _jsRuntime.InvokeVoidAsync("pgliteInterop.init");
 
+        Console.WriteLine("[RunCompiledCode] Step 2: configure EF Core");
         // Make JS runtime available to PgLiteDbCommand
         PgLiteJsRuntime.Instance = _jsRuntime;
 
@@ -643,9 +645,11 @@ public class CodeExecutionService
             .ReplaceService<IModificationCommandBatchFactory, PgLiteModificationCommandBatchFactory>()
             .Options;
 
+        Console.WriteLine("[RunCompiledCode] Step 3: EnsureCreated");
         await using var context = new PlaygroundDbContext(options);
         await context.Database.EnsureCreatedAsync();
 
+        Console.WriteLine("[RunCompiledCode] Step 4: resolve Execute method");
         var type = assembly.GetType("EfCorePlayground.UserCode.UserQuery");
         var method = type?.GetMethod("Execute");
 
@@ -658,18 +662,21 @@ public class CodeExecutionService
             };
         }
 
+        Console.WriteLine("[RunCompiledCode] Step 5: invoke user code");
         // Start capturing SQL from user query execution (not schema creation)
         PgLiteSqlCapture.Start();
 
         var resultTask = (Task<object?>?)method.Invoke(null, new object[] { context });
         var result = resultTask != null ? await resultTask : null;
 
+        Console.WriteLine("[RunCompiledCode] Step 6: format result");
         // Collect captured SQL
         var capturedQueries = PgLiteSqlCapture.Stop();
 
         // Format the result
         var (output, columns, rows) = FormatResult(result);
 
+        Console.WriteLine("[RunCompiledCode] Step 7: serialize JSON");
         // Full JSON serialization (includes navigation properties) for tree view
         string? richJson = null;
         if (result != null && result is not string && !(result.GetType().IsPrimitive) && !(result is decimal) && !(result is DateTime))
@@ -678,6 +685,7 @@ public class CodeExecutionService
             catch { /* best-effort */ }
         }
 
+        Console.WriteLine("[RunCompiledCode] Step 8: done");
         return new ExecutionResult
         {
             Success = true,

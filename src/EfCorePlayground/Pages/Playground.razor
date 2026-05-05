@@ -157,6 +157,8 @@
             sw.Stop();
             executionTimeMs = (int)sw.ElapsedMilliseconds;
 
+            Console.WriteLine($"[ExecuteCode] ExecuteAsync returned: Success={currentResult.Success}, Cols={currentResult.Columns?.Count}, Rows={currentResult.Rows?.Count}, CapturedQueries={currentResult.CapturedQueries?.Count}");
+
             // Set or clear editor markers
             if (currentResult.Success)
             {
@@ -164,7 +166,16 @@
                 // Refresh data viewer after successful execution
                 if (dataViewerPanel != null)
                 {
-                    await dataViewerPanel.RefreshData();
+                    try
+                    {
+                        Console.WriteLine("[ExecuteCode] RefreshData start");
+                        await dataViewerPanel.RefreshData();
+                        Console.WriteLine("[ExecuteCode] RefreshData done");
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.Error.WriteLine($"[ExecuteCode] RefreshData failed: {ex.GetType().Name}: {ex.Message}");
+                    }
                 }
             }
             else if (currentResult.Errors?.Count > 0)
@@ -175,6 +186,7 @@
         }
         catch (Exception ex)
         {
+            Console.Error.WriteLine($"[ExecuteCode] CATCH: {ex.GetType().Name}: {ex.Message}\n{ex.StackTrace}");
             currentResult = new ExecutionResult
             {
                 Success = false,
@@ -185,6 +197,7 @@
         finally
         {
             isExecuting = false;
+            Console.WriteLine("[ExecuteCode] StateHasChanged");
             StateHasChanged();
         }
     }

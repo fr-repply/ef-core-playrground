@@ -220,16 +220,23 @@
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
-        var currentSql = Result?.GeneratedSql;
-        if (currentSql != _lastSql)
+        try
         {
-            _lastSql = currentSql;
-            if (!string.IsNullOrEmpty(currentSql))
+            var currentSql = Result?.GeneratedSql;
+            if (currentSql != _lastSql)
             {
-                // Small delay to ensure the container element exists in DOM
-                await Task.Delay(50);
-                await JS.InvokeVoidAsync("monacoInterop.createSqlViewer", "sql-viewer-container", currentSql);
+                _lastSql = currentSql;
+                if (!string.IsNullOrEmpty(currentSql))
+                {
+                    // Small delay to ensure the container element exists in DOM
+                    await Task.Delay(50);
+                    await JS.InvokeVoidAsync("monacoInterop.createSqlViewer", "sql-viewer-container", currentSql);
+                }
             }
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"[ResultsPanel] OnAfterRenderAsync error: {ex.GetType().Name}: {ex.Message}");
         }
     }
 
