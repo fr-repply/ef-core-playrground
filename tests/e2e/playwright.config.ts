@@ -2,10 +2,6 @@ import { defineConfig } from '@playwright/test';
 
 export default defineConfig({
     testDir: './tests',
-    // timeout: 20_000,
-    // expect: {
-    //     timeout: 30_000,
-    // },
     fullyParallel: false,
     retries: 1,
     workers: 1,
@@ -14,6 +10,9 @@ export default defineConfig({
         baseURL: 'http://localhost:5000',
         trace: 'on-first-retry',
         headless: true,
+        // Use a fresh browser context per test to avoid browser cache issues
+        // (stale precompiled DLLs, cached ref assemblies, localStorage)
+        storageState: undefined,
     },
     projects: [
         {

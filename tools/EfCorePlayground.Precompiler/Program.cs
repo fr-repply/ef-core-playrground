@@ -389,11 +389,14 @@ static List<MetadataReference> BuildReferences(string efDllPath)
     return result;
 }
 
-static CSharpCompilation CreateCompilation(string code, List<MetadataReference> refs)
+static CSharpCompilation CreateCompilation(string code, List<MetadataReference> refs, string? assemblyName = null)
 {
     var tree = CSharpSyntaxTree.ParseText(code);
+    // Use a unique assembly name for each compilation to avoid WASM Assembly.Load
+    // conflicts when loading multiple assemblies with the same name.
+    assemblyName ??= $"UserCode_{Guid.NewGuid():N}";
     return CSharpCompilation.Create(
-        "UserCodeAssembly",
+        assemblyName,
         [tree],
         refs,
         new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary)

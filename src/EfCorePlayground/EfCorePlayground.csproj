@@ -71,7 +71,10 @@
       <!-- BCL ref assemblies output dir: served as static assets for Roslyn WASM compilation -->
       <BclRefOutputDir>$(MSBuildProjectDirectory)\wwwroot\ref</BclRefOutputDir>
     </PropertyGroup>
+    <!-- Clear output dirs before rebuild to avoid stale DLLs from previous builds -->
+    <RemoveDir Directories="$(PrecompiledOutputDir)" />
     <MakeDir Directories="$(PrecompiledOutputDir)" />
+    <RemoveDir Directories="$(BclRefOutputDir)" />
     <MakeDir Directories="$(BclRefOutputDir)" />
     <Exec
       Command="dotnet run --project &quot;$(PrecompilerProject)&quot; -- &quot;$(OutputPath)EfCorePlayground.dll&quot; &quot;$(PrecompiledOutputDir)&quot; &quot;$(ProjectablesGeneratorDll)&quot; &quot;$(BclRefOutputDir)&quot;"
