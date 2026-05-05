@@ -100,12 +100,11 @@
             dotNetRef = DotNetObjectReference.Create(this);
 
             // Restore previously compiled assemblies from localStorage (fast, no Roslyn involved)
-            await executionService.LoadCacheFromStorageAsync();
+            try { await executionService.LoadCacheFromStorageAsync(); }
+            catch (Exception ex) { Console.Error.WriteLine($"[Init] Cache load failed: {ex.Message}"); }
 
             // Warm up Roslyn in the background: JIT-initialise its internals and pre-load all
             // metadata references so the first real compilation is significantly faster.
-            executionService.WarmUpRoslynBackground();
-
             // Check if code is passed via URL
             var uri = new Uri(Nav.Uri);
             var initialCode = DefaultCode;
@@ -126,6 +125,9 @@
 
             await JS.InvokeVoidAsync("monacoInterop.initialize", "monaco-editor-container", initialCode, dotNetRef,
                 CodeExecutionService.PrefixLineCount, CodeExecutionService.SuffixLineCount);
+
+            // Warm up Roslyn after Monaco is initialized
+            await executionService.WarmUpRoslynAsync();
         }
     }
 

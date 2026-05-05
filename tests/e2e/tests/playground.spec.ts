@@ -15,7 +15,9 @@ test.describe('EF Core Playground', () => {
     });
 
     test('should display the schema panel with tables', async ({ page }) => {
-        const schemaPanel = page.locator('.card-body').first();
+        // Schema is collapsed by default — expand it first
+        await page.getByText('Schéma').click();
+
         await expect(page.getByRole('heading', { name: 'Blogs' })).toBeVisible();
         await expect(page.getByRole('heading', { name: 'Posts' })).toBeVisible();
         await expect(page.getByRole('heading', { name: 'Authors' })).toBeVisible();
@@ -63,8 +65,7 @@ test.describe('EF Core Playground', () => {
     });
 
     test('should load example into editor', async ({ page }) => {
-        // Collapse schema to make room for examples
-        await page.getByText('Schéma').click();
+        // Schema is collapsed by default, examples should be visible
 
         // Click on example
         await page.getByRole('button', { name: 'Blogs avec rating' }).click();
@@ -97,8 +98,7 @@ test.describe('EF Core Playground', () => {
     });
 
     test('should reset code to default', async ({ page }) => {
-        // Collapse schema to make room for examples
-        await page.getByText('Schéma').click();
+        // Schema is collapsed by default, examples should be visible
 
         // Load an example first
         await page.getByRole('button', { name: 'Lister tous les blogs' }).click();
@@ -117,20 +117,20 @@ test.describe('EF Core Playground', () => {
         // Use a heading inside the schema panel to check visibility
         const schemaHeading = page.getByRole('heading', { name: 'Blogs' });
 
-        // Schema should be visible initially
-        await expect(schemaHeading).toBeVisible();
-
-        // Click schema header to collapse
-        await page.getByText('Schéma').click();
-
-        // Schema table headings should be hidden
+        // Schema should be collapsed initially
         await expect(schemaHeading).not.toBeVisible();
 
-        // Click again to expand
+        // Click schema header to expand
         await page.getByText('Schéma').click();
 
-        // Schema table headings should be visible again
+        // Schema table headings should be visible
         await expect(schemaHeading).toBeVisible();
+
+        // Click again to collapse
+        await page.getByText('Schéma').click();
+
+        // Schema table headings should be hidden again
+        await expect(schemaHeading).not.toBeVisible();
     });
 });
 
@@ -145,8 +145,7 @@ test.describe('EF Core Playground - Groupement par auteur', () => {
     test('should execute groupement par auteur without APPLY error', async ({ page }) => {
         test.slow();
 
-        // Collapse schema panel to make room for examples list
-        await page.getByText('Schéma').click();
+        // Schema is collapsed by default, examples should be visible
 
         // Click the example
         await page.getByRole('button', { name: 'Groupement par auteur' }).click();
@@ -181,14 +180,16 @@ test.describe('EF Core Playground - Projectables', () => {
     });
 
     test('should display Projectables examples in the panel', async ({ page }) => {
-        // Collapse schema to see all examples
-        await page.getByText('Schéma').click();
+        // Schema is collapsed by default, examples should be visible
         await expect(page.getByRole('button', { name: /Projectable: Blogs populaires/ })).toBeVisible();
         await expect(page.getByRole('button', { name: /Projectable: Auteurs productifs/ })).toBeVisible();
         await expect(page.getByRole('button', { name: /Projectable: Posts récents/ })).toBeVisible();
     });
 
     test('should display computed properties in schema panel', async ({ page }) => {
+        // Schema is collapsed by default — expand it
+        await page.getByText('Schéma').click();
+
         // Check that computed properties are shown in schema
         const schemaBody = page.locator('.card-body').first();
         await expect(schemaBody).toContainText('PostCount');
@@ -199,8 +200,7 @@ test.describe('EF Core Playground - Projectables', () => {
     test('should execute Projectable: Blogs populaires', async ({ page }) => {
         test.slow();
 
-        // Collapse schema to make room for examples
-        await page.getByText('Schéma').click();
+        // Schema is collapsed by default, examples should be visible
 
         // Click the example
         await page.getByRole('button', { name: /Projectable: Blogs populaires/ }).click();
@@ -230,8 +230,7 @@ test.describe('EF Core Playground - Projectables', () => {
     test('should execute Projectable: Auteurs productifs', async ({ page }) => {
         test.slow();
 
-        // Collapse schema to make room for examples
-        await page.getByText('Schéma').click();
+        // Schema is collapsed by default, examples should be visible
 
         // Click the example
         await page.getByRole('button', { name: /Projectable: Auteurs productifs/ }).click();
@@ -260,8 +259,7 @@ test.describe('EF Core Playground - Projectables', () => {
     test('should execute Projectable: Posts récents avec tags', async ({ page }) => {
         test.slow();
 
-        // Collapse schema to make room for examples
-        await page.getByText('Schéma').click();
+        // Schema is collapsed by default, examples should be visible
 
         // Click the example
         await page.getByRole('button', { name: /Projectable: Posts récents/ }).click();

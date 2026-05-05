@@ -94,13 +94,30 @@ public class CodeExecutionService
     /// pre-load all metadata references. The result is discarded — this is a pure warm-up.
     /// Fire-and-forget: call without await.
     /// </summary>
-    public void WarmUpRoslynBackground()
+    /// <summary>
+    /// Triggers a background trivial compilation to JIT-initialise Roslyn internals and
+    /// pre-load all metadata references. Returns a Task that completes when warm-up finishes.
+    /// The caller should await this or observe exceptions to avoid Blazor error overlay.
+    /// </summary>
+    public async Task WarmUpRoslynAsync()
     {
-        _ = Task.Run(async () =>
+        try
         {
-            try { (await CreateCompilationAsync(BuildFullCode("return null;"))).Emit(Stream.Null); }
-            catch { /* best-effort */ }
-        });
+            await Task.Yield(); // Allow UI to continue rendering
+            // JIT-warm Roslyn parsing, compilation creation, and emit pipeline.
+            // Does NOT load metadata references (HTTP fetch in WASM can trigger error overlay).
+            // Refs are loaded lazily on first real compilation.
+            var tree = CSharpSyntaxTree.ParseText(BuildFullCode("return null;"));
+            var compilation = CSharpCompilation.Create("warmup", new[] { tree },
+                Array.Empty<MetadataReference>(),
+                new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
+            compilation.Emit(Stream.Null);
+            Console.WriteLine("[Warmup] Roslyn JIT warm-up completed");
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"[Warmup] Roslyn warm-up failed (best-effort): {ex.GetType().Name}: {ex.Message}");
+        }
     }
 
 
@@ -413,7 +430,9 @@ public class CodeExecutionService
     {
         try
         {
-            var bytes = await _http.GetByteArrayAsync(url);
+            var response = await _http.GetAsync(url, HttpCompletionOption.ResponseHeadersRead);
+            if (!response.IsSuccessStatusCode) return null;
+            var bytes = await response.Content.ReadAsByteArrayAsync();
             return IsManagedPe(bytes) ? MetadataReference.CreateFromImage(bytes) : null;
         }
         catch
