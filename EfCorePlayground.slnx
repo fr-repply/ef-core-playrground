@@ -1,4 +1,9 @@
 <Solution>
+  <Folder Name="/.root/">
+    <File Path=".gitignore" />
+    <File Path="INSTRUCTIONS.md" />
+    <File Path="README.md" />
+  </Folder>
   <Folder Name="/src/">
     <Project Path="src/EfCorePlayground/EfCorePlayground.csproj" />
   </Folder>

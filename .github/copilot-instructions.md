@@ -13,7 +13,7 @@ Toute nouvelle fonctionnalité, convention, contrainte technique, ou décision d
 
 - **Blazor WebAssembly** (.NET 10) — tout tourne dans le navigateur, pas de serveur
 - **Roslyn** (`Microsoft.CodeAnalysis.CSharp`) — compilation C# dynamique in-browser
-- **EF Core 10 + PGlite** (`@electric-sql/pglite`) — backend PostgreSQL WASM via JS interop (pas SQLite)
+- **EF Core 10 + PGlite** (`@electric-sql/pglite`) — backend PostgreSQL WASM via JS interop
 - **Npgsql** — provider EF Core PostgreSQL (avec services remplacés pour PGlite)
 - **EntityFrameworkCore.Projectables** — traduit des propriétés C# en SQL via source generator
 - **Monaco Editor** + **Bootstrap 5** — bundlés localement via **Vite** (aucun CDN)

@@ -2,15 +2,15 @@
 
 Un environnement interactif de type REPL pour **Entity Framework Core 10**, entièrement dans le navigateur.
 
-Écrivez des requêtes LINQ, compilez-les avec Roslyn, exécutez-les sur une base SQLite — le tout via WebAssembly, sans serveur.
+Écrivez des requêtes LINQ, compilez-les avec Roslyn, exécutez-les sur une base PostgreSQL — le tout via WebAssembly, sans serveur.
 
 ## ✨ Fonctionnalités
 
 - 🖊️ **Monaco Editor** — Éditeur de code riche (même moteur que VS Code)
 - ⚡ **Compilation C# en temps réel** — Roslyn compile votre code dans le navigateur
 - 🗄️ **Base de données pré-seedée** — 4 blogs, 3 auteurs, 10 posts, 8 tags
-- 📊 **Affichage tabulaire** — Résultats présentés sous forme de tableau
-- 🎓 **Exemples intégrés** — 8 requêtes LINQ prêtes à l'emploi
+- 📊 **Affichage tabulaire** — Résultats présentés sous forme de tableau ou arbre JSON
+- 🎓 **Exemples intégrés** — Requêtes LINQ prêtes à l'emploi
 - 🌐 **100% statique** — Déployable sur GitHub Pages, Netlify, Vercel
 
 ## 🚀 Démarrage rapide
