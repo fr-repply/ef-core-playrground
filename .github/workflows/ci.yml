@@ -1,0 +1,75 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build:
+    name: Build & Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Install WASM workload
+        run: dotnet workload install wasm-tools
+
+      - name: Build (Debug)
+        run: dotnet build src/EfCorePlayground/EfCorePlayground.csproj -c Debug
+
+      - name: Verify ref assemblies exist
+        run: |
+          echo "Checking wwwroot/ref/manifest.txt..."
+          cat src/EfCorePlayground/wwwroot/ref/manifest.txt
+          REF_COUNT=$(wc -l < src/EfCorePlayground/wwwroot/ref/manifest.txt)
+          echo "Found $REF_COUNT ref assemblies"
+          if [ "$REF_COUNT" -lt 10 ]; then
+            echo "ERROR: Too few ref assemblies ($REF_COUNT < 10)"
+            exit 1
+          fi
+
+      - name: Verify precompiled examples exist
+        run: |
+          PRECOMPILED=$(ls src/EfCorePlayground/wwwroot/precompiled/*.dll 2>/dev/null | wc -l)
+          echo "Found $PRECOMPILED precompiled example DLLs"
+          if [ "$PRECOMPILED" -lt 5 ]; then
+            echo "ERROR: Too few precompiled examples ($PRECOMPILED < 5)"
+            exit 1
+          fi
+
+      - name: Publish (Release - static)
+        run: dotnet publish src/EfCorePlayground/EfCorePlayground.csproj -c Release -o dist
+
+      - name: Verify publish output
+        run: |
+          echo "Checking publish output..."
+          ls dist/wwwroot/ref/manifest.txt
+          ls dist/wwwroot/precompiled/*.dll | head -3
+          ls dist/wwwroot/index.html
+          echo "Publish output OK"
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install e2e dependencies
+        working-directory: tests/e2e
+        run: npm ci
+
+      - name: Install Playwright browsers
+        working-directory: tests/e2e
+        run: npx playwright install chromium
+
+      - name: Run e2e tests (dev mode)
+        working-directory: tests/e2e
+        run: npx playwright test --reporter=line --timeout=300000
+        env:
+          CI: true

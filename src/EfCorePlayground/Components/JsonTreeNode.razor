@@ -1,0 +1,135 @@
+﻿@using System.Text.Json
+
+@{
+    var isExpandable = Value.ValueKind is JsonValueKind.Object or JsonValueKind.Array;
+    var indent = Depth * 14;
+}
+
+@if (isExpandable)
+{
+    <div>
+        <div class="d-flex align-items-start json-row"
+             @onclick="Toggle"
+             style="padding-left:@(indent)px; cursor:pointer; user-select:none;">
+            <i class="bi @(_expanded ? "bi-chevron-down" : "bi-chevron-right") flex-shrink-0 text-muted me-1"
+               style="margin-top:3px; font-size:0.65rem;"></i>
+
+            @if (!string.IsNullOrEmpty(Label))
+            {
+                <span class="json-key me-1">@Label</span>
+                <span class="text-muted me-1">:</span>
+            }
+
+            @if (Value.ValueKind == JsonValueKind.Array)
+            {
+                @if (_expanded)
+                {
+                    <span class="text-muted json-bracket">[</span>
+                }
+                else
+                {
+                    <span class="text-muted">
+                        [<span class="badge bg-secondary ms-1" style="font-size:0.65rem;">@Value.GetArrayLength()</span>]
+                    </span>
+                }
+            }
+            else
+            {
+                <span class="text-muted">@(_expanded ? "{" : "{ … }")</span>
+            }
+        </div>
+
+        @if (_expanded)
+        {
+            @if (Value.ValueKind == JsonValueKind.Object)
+            {
+                @foreach (var prop in Value.EnumerateObject())
+                {
+                    <JsonTreeNode Label="@prop.Name"
+                                  Value="@prop.Value"
+                                  Depth="@(Depth + 1)"
+                                  InitiallyExpanded="@ShouldExpandChild(prop.Value)" />
+                }
+                <div style="padding-left:@(indent)px;" class="text-muted json-bracket ps-3">}</div>
+            }
+            else
+            {
+                @foreach (var (item, i) in Value.EnumerateArray().Select((v, i) => (v, i)))
+                {
+                    <JsonTreeNode Label="@GetItemLabel(item, i)"
+                                  Value="@item"
+                                  Depth="@(Depth + 1)"
+                                  InitiallyExpanded="@ShouldExpandChild(item)" />
+                }
+                <div style="padding-left:@(indent)px;" class="text-muted json-bracket ps-3">]</div>
+            }
+        }
+    </div>
+}
+else
+{
+    <div class="d-flex json-row" style="padding-left:@(indent + 18)px;">
+        @if (!string.IsNullOrEmpty(Label))
+        {
+            <span class="json-key me-1">@Label</span>
+            <span class="text-muted me-1">:</span>
+        }
+        <span style="color:@GetValueColor()">@FormatValue()</span>
+    </div>
+}
+
+@code {
+    [Parameter, EditorRequired] public JsonElement Value { get; set; }
+    [Parameter] public string? Label { get; set; }
+    [Parameter] public int Depth { get; set; } = 0;
+    [Parameter] public bool InitiallyExpanded { get; set; } = false;
+
+    private bool _expanded;
+
+    protected override void OnInitialized() => _expanded = InitiallyExpanded;
+
+    private void Toggle() => _expanded = !_expanded;
+
+    /// <summary>
+    /// Auto-expand logic: expand objects at shallow depth, collapse nested collections by default.
+    /// </summary>
+    private bool ShouldExpandChild(JsonElement el)
+    {
+        if (el.ValueKind == JsonValueKind.Object)
+            return Depth < 1;   // expand first-level objects, collapse deeper
+        if (el.ValueKind == JsonValueKind.Array)
+            return false;       // collections always collapsed by default
+        return false;
+    }
+
+    private string GetItemLabel(JsonElement item, int index)
+    {
+        if (item.ValueKind != JsonValueKind.Object) return index.ToString();
+        // Use "id" for a nice label, fallback to index
+        if (item.TryGetProperty("id", out var id))
+            return $"#{id.GetRawText()}";
+        if (item.TryGetProperty("name", out var name) && name.ValueKind == JsonValueKind.String)
+            return name.GetString() ?? $"[{index}]";
+        return $"[{index}]";
+    }
+
+    private string FormatValue() => Value.ValueKind switch
+    {
+        JsonValueKind.String => $"\"{Value.GetString()}\"",
+        JsonValueKind.Null   => "null",
+        JsonValueKind.True   => "true",
+        JsonValueKind.False  => "false",
+        _                    => Value.GetRawText()
+    };
+
+    private string GetValueColor() => Value.ValueKind switch
+    {
+        JsonValueKind.String              => "var(--json-string-color, #ce9178)",
+        JsonValueKind.Number              => "var(--json-number-color, #b5cea8)",
+        JsonValueKind.True or
+        JsonValueKind.False               => "var(--json-bool-color, #569cd6)",
+        JsonValueKind.Null                => "var(--json-null-color, #888)",
+        _                                 => "inherit"
+    };
+}
+

@@ -1,0 +1,244 @@
+@page "/"
+@using EfCorePlayground.Services
+@inject IJSRuntime JS
+@inject NavigationManager Nav
+@inject HttpClient Http
+
+<div class="container-fluid h-100 py-2">
+    <div class="row g-2 h-100">
+        @* Left panel: Schema + Data Viewer + Examples *@
+        <div class="col-md-3 d-flex flex-column overflow-auto h-100">
+            <SchemaPanel />
+            <DataViewerPanel @ref="dataViewerPanel" />
+            <ExamplesPanel OnExampleSelected="LoadExample" />
+        </div>
+
+        @* Center panel: Monaco Editor *@
+        <div class="col-md-5 d-flex flex-column h-100">
+            <div class="card flex-grow-1 d-flex flex-column">
+                <div class="card-header bg-dark text-white py-2 d-flex justify-content-between align-items-center">
+                    <span><i class="bi bi-code-slash me-1"></i> Éditeur C# / LINQ</span>
+                    <div>
+                        <button class="btn btn-sm btn-outline-light me-1" @onclick="ShareCode" title="Partager (copier l'URL)">
+                            <i class="bi bi-share"></i>
+                        </button>
+                        <button class="btn btn-sm btn-outline-light me-1" @onclick="ResetCode" title="Réinitialiser">
+                            <i class="bi bi-arrow-counterclockwise"></i>
+                        </button>
+                        <button class="btn btn-sm btn-success" @onclick="ExecuteCode" disabled="@isExecuting">
+                            @if (isExecuting)
+                            {
+                                <span class="spinner-border spinner-border-sm me-1"></span>
+                                <span>Exécution...</span>
+                            }
+                            else
+                            {
+                                <i class="bi bi-play-fill me-1"></i>
+                                <span>Exécuter (Ctrl+Enter)</span>
+                            }
+                        </button>
+                    </div>
+                </div>
+                <div class="card-body p-0 flex-grow-1">
+                    <div id="monaco-editor-container" style="height: 100%; width: 100%;"></div>
+                </div>
+                <div class="card-footer bg-light py-1 small text-muted d-flex justify-content-between">
+                    <span>
+                        <i class="bi bi-info-circle me-1"></i>
+                        <code>db</code> = DbContext.
+                        Retournez le résultat avec <code>return</code>.
+                    </span>
+                    @if (shareMessage != null)
+                    {
+                        <span class="text-success">
+                            <i class="bi bi-check-circle me-1"></i>@shareMessage
+                        </span>
+                    }
+                    else if (executionTimeMs.HasValue)
+                    {
+                        <span>
+                            <i class="bi bi-clock me-1"></i>@executionTimeMs.Value ms
+                        </span>
+                    }
+                </div>
+            </div>
+        </div>
+
+        @* Right panel: Results *@
+        <div class="col-md-4 d-flex flex-column h-100">
+            <ResultsPanel Result="@currentResult" IsExecuting="@isExecuting" />
+        </div>
+    </div>
+</div>
+
+@code {
+    private bool isExecuting;
+    private int? executionTimeMs;
+    private ExecutionResult? currentResult;
+    private DotNetObjectReference<Playground>? dotNetRef;
+    private CodeExecutionService? executionService;
+    private DataViewerPanel? dataViewerPanel;
+    private string? shareMessage;
+
+    private static readonly string DefaultCode = CodeExecutionService.BuildFullCode(
+        "// Bienvenue dans le Playground EF Core 10 !\n" +
+        "// Écrivez vos requêtes LINQ ci-dessous.\n" +
+        "// La variable 'db' est votre DbContext avec les tables :\n" +
+        "//   db.Blogs, db.Posts, db.Authors, db.Tags\n" +
+        "//\n" +
+        "// Exemples :\n" +
+        "//   return await db.Blogs.ToListAsync();\n" +
+        "//   return await db.Posts.Where(p => p.BlogId == 1).ToListAsync();\n" +
+        "\n" +
+        "return await db.Blogs.ToListAsync();");
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+        {
+            executionService = new CodeExecutionService(JS, Http);
+            dotNetRef = DotNetObjectReference.Create(this);
+
+            // Restore previously compiled assemblies from localStorage (fast, no Roslyn involved)
+            try { await executionService.LoadCacheFromStorageAsync(); }
+            catch (Exception ex) { Console.WriteLine($"[Init] Cache load failed: {ex.Message}"); }
+
+            // Warm up Roslyn in the background: JIT-initialise its internals and pre-load all
+            // metadata references so the first real compilation is significantly faster.
+            // Check if code is passed via URL
+            var uri = new Uri(Nav.Uri);
+            var initialCode = DefaultCode;
+            var queryParams = System.Web.HttpUtility.ParseQueryString(uri.Query);
+            var codeParam = queryParams["code"];
+            if (!string.IsNullOrEmpty(codeParam))
+            {
+                try
+                {
+                    var bytes = Convert.FromBase64String(codeParam);
+                    initialCode = System.Text.Encoding.UTF8.GetString(bytes);
+                }
+                catch
+                {
+                    // Invalid base64, fall back to default
+                }
+            }
+
+            await JS.InvokeVoidAsync("monacoInterop.initialize", "monaco-editor-container", initialCode, dotNetRef,
+                CodeExecutionService.PrefixLineCount, CodeExecutionService.SuffixLineCount);
+
+            // Warm up Roslyn after Monaco is initialized
+            await executionService.WarmUpRoslynAsync();
+        }
+    }
+
+    [JSInvokable]
+    public async Task OnExecuteFromEditor()
+    {
+        await ExecuteCode();
+    }
+
+    private async Task ExecuteCode()
+    {
+        if (isExecuting || executionService == null) return;
+        isExecuting = true;
+        currentResult = null;
+        executionTimeMs = null;
+        shareMessage = null;
+
+        // Dispose previous SQL viewer before new execution
+        await JS.InvokeVoidAsync("monacoInterop.disposeSqlViewer");
+        StateHasChanged();
+
+        try
+        {
+            var code = await JS.InvokeAsync<string>("monacoInterop.getValue");
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+            currentResult = await executionService.ExecuteAsync(code);
+            sw.Stop();
+            executionTimeMs = (int)sw.ElapsedMilliseconds;
+
+            // Set or clear editor markers
+            if (currentResult.Success)
+            {
+                await JS.InvokeVoidAsync("monacoInterop.clearMarkers");
+                // Refresh data viewer after successful execution
+                if (dataViewerPanel != null)
+                {
+                    await dataViewerPanel.RefreshData();
+                }
+            }
+            else if (currentResult.Errors?.Count > 0)
+            {
+                var markers = currentResult.Errors.Select(e => new { line = e.Line, column = e.Column, message = e.Message }).ToArray();
+                await JS.InvokeVoidAsync("monacoInterop.setMarkers", (object)markers);
+            }
+        }
+        catch (Exception ex)
+        {
+            currentResult = new ExecutionResult
+            {
+                Success = false,
+                Output = $"Erreur : {ex.Message}",
+                Errors = new() { new() { Id = "RUNTIME", Message = ex.Message } }
+            };
+        }
+        finally
+        {
+            isExecuting = false;
+            StateHasChanged();
+        }
+    }
+
+    private async Task LoadExample(string code)
+    {
+        string fullCode;
+        if (code.StartsWith("FULLCODE:"))
+        {
+            fullCode = code.Substring("FULLCODE:".Length);
+        }
+        else
+        {
+            fullCode = CodeExecutionService.BuildFullCode(code);
+        }
+        await JS.InvokeVoidAsync("monacoInterop.setValue", fullCode);
+    }
+
+    private async Task ResetCode()
+    {
+        await JS.InvokeVoidAsync("monacoInterop.setValue", DefaultCode);
+        await JS.InvokeVoidAsync("monacoInterop.disposeSqlViewer");
+        currentResult = null;
+        executionTimeMs = null;
+        shareMessage = null;
+    }
+
+    private async Task ShareCode()
+    {
+        var code = await JS.InvokeAsync<string>("monacoInterop.getValue");
+        var bytes = System.Text.Encoding.UTF8.GetBytes(code);
+        var base64 = Convert.ToBase64String(bytes);
+        var baseUri = Nav.BaseUri.TrimEnd('/');
+        var shareUrl = $"{baseUri}/?code={Uri.EscapeDataString(base64)}";
+
+        await JS.InvokeVoidAsync("navigator.clipboard.writeText", shareUrl);
+        shareMessage = "URL copiée !";
+        StateHasChanged();
+
+        // Clear message after 3 seconds
+        _ = Task.Run(async () =>
+        {
+            await Task.Delay(3000);
+            await InvokeAsync(() =>
+            {
+                shareMessage = null;
+                StateHasChanged();
+            });
+        });
+    }
+
+    public void Dispose()
+    {
+        dotNetRef?.Dispose();
+        executionService?.Dispose();
+    }
+}

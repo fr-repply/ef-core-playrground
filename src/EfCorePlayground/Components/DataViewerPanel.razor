@@ -1,0 +1,241 @@
+@inject IJSRuntime JS
+
+<div class="card mb-2 flex-shrink-0">
+    <div class="card-header bg-secondary text-white py-2 d-flex justify-content-between align-items-center"
+         role="button" @onclick="ToggleDataViewer">
+        <span><i class="bi bi-database me-1"></i> Données</span>
+        <div class="d-flex align-items-center">
+            @if (isLoading)
+            {
+                <span class="spinner-border spinner-border-sm text-light me-2" role="status"></span>
+            }
+            <i class="bi @(showDataViewer ? "bi-chevron-up" : "bi-chevron-down")"></i>
+        </div>
+    </div>
+    @if (showDataViewer)
+    {
+        <div class="card-body p-2">
+            @if (errorMessage != null)
+            {
+                <div class="alert alert-warning py-1 small mb-2">
+                    <i class="bi bi-exclamation-triangle me-1"></i>@errorMessage
+                </div>
+            }
+            else if (tableNames.Count == 0 && !isLoading)
+            {
+                <p class="text-muted small mb-0">
+                    <i class="bi bi-info-circle me-1"></i>
+                    Exécutez une requête d'abord pour initialiser la base.
+                </p>
+            }
+            else
+            {
+                <div class="mb-2">
+                    <div class="btn-group btn-group-sm w-100 flex-wrap" role="group">
+                        @foreach (var table in tableNames)
+                        {
+                            <button class="btn @(selectedTable == table ? "btn-secondary" : "btn-outline-secondary") btn-sm"
+                                    @onclick="() => SelectTable(table)">
+                                <i class="bi bi-table me-1"></i>@table
+                            </button>
+                        }
+                    </div>
+                </div>
+
+                @if (selectedTable != null && currentColumns.Count > 0)
+                {
+                    <div class="small text-muted mb-1">
+                        <strong>@selectedTable</strong> — @currentRows.Count ligne(s)
+                    </div>
+                    <div class="table-responsive" style="max-height: 250px; overflow-y: auto;">
+                        <table class="table table-striped table-sm table-hover mb-0" style="font-size: 0.75rem;">
+                            <thead class="table-dark sticky-top">
+                                <tr>
+                                    @foreach (var col in currentColumns)
+                                    {
+                                        <th>@col</th>
+                                    }
+                                </tr>
+                            </thead>
+                            <tbody>
+                                @foreach (var row in currentRows)
+                                {
+                                    <tr>
+                                        @foreach (var col in currentColumns)
+                                        {
+                                            <td>
+                                                @if (row.TryGetValue(col, out var value) && value != null)
+                                                {
+                                                    @FormatCellValue(value)
+                                                }
+                                                else
+                                                {
+                                                    <span class="text-muted fst-italic">null</span>
+                                                }
+                                            </td>
+                                        }
+                                    </tr>
+                                }
+                            </tbody>
+                        </table>
+                    </div>
+                }
+                else if (selectedTable != null && !isLoading)
+                {
+                    <p class="text-muted small mb-0">Table vide.</p>
+                }
+            }
+
+            <div class="mt-2">
+                <button class="btn btn-sm btn-outline-secondary w-100" @onclick="RefreshData" disabled="@isLoading">
+                    <i class="bi bi-arrow-clockwise me-1"></i>Rafraîchir
+                </button>
+            </div>
+        </div>
+    }
+</div>
+
+@code {
+    private bool showDataViewer = false;
+    private bool isLoading = false;
+    private string? errorMessage;
+    private List<string> tableNames = new();
+    private string? selectedTable;
+    private List<string> currentColumns = new();
+    private List<Dictionary<string, object?>> currentRows = new();
+
+    private async Task ToggleDataViewer()
+    {
+        showDataViewer = !showDataViewer;
+        if (showDataViewer && tableNames.Count == 0)
+        {
+            await RefreshData();
+        }
+    }
+
+    public async Task RefreshData()
+    {
+        isLoading = true;
+        errorMessage = null;
+        StateHasChanged();
+
+        try
+        {
+            // Query PGlite for table names
+            var result = await JS.InvokeAsync<System.Text.Json.JsonElement>(
+                "pgliteInterop.query",
+                "SELECT tablename FROM pg_tables WHERE schemaname = 'public' ORDER BY tablename",
+                Array.Empty<object>());
+
+            tableNames.Clear();
+            if (result.TryGetProperty("rows", out var rowsEl))
+            {
+                foreach (var row in rowsEl.EnumerateArray())
+                {
+                    var cells = row.EnumerateArray().ToArray();
+                    if (cells.Length > 0 && cells[0].ValueKind == System.Text.Json.JsonValueKind.String)
+                    {
+                        tableNames.Add(cells[0].GetString()!);
+                    }
+                }
+            }
+
+            // Auto-select first table if none selected
+            if (selectedTable == null && tableNames.Count > 0)
+            {
+                await SelectTable(tableNames[0]);
+            }
+            else if (selectedTable != null && tableNames.Contains(selectedTable))
+            {
+                await SelectTable(selectedTable);
+            }
+            else
+            {
+                selectedTable = null;
+                currentColumns.Clear();
+                currentRows.Clear();
+            }
+        }
+        catch (Exception ex)
+        {
+            errorMessage = ex.Message.Contains("not initialized")
+                ? "Base non initialisée. Exécutez une requête d'abord."
+                : $"Erreur : {ex.Message}";
+            tableNames.Clear();
+            currentColumns.Clear();
+            currentRows.Clear();
+        }
+        finally
+        {
+            isLoading = false;
+            StateHasChanged();
+        }
+    }
+
+    private async Task SelectTable(string tableName)
+    {
+        selectedTable = tableName;
+        isLoading = true;
+        StateHasChanged();
+
+        try
+        {
+            // Quote the table name to handle case sensitivity
+            var result = await JS.InvokeAsync<System.Text.Json.JsonElement>(
+                "pgliteInterop.query",
+                $"SELECT * FROM \"{tableName}\" LIMIT 100",
+                Array.Empty<object>());
+
+            currentColumns.Clear();
+            currentRows.Clear();
+
+            if (result.TryGetProperty("columns", out var colsEl))
+            {
+                currentColumns = colsEl.EnumerateArray()
+                    .Select(c => c.GetString() ?? "")
+                    .ToList();
+            }
+
+            if (result.TryGetProperty("rows", out var rowsEl))
+            {
+                foreach (var row in rowsEl.EnumerateArray())
+                {
+                    var dict = new Dictionary<string, object?>();
+                    var cells = row.EnumerateArray().ToArray();
+                    for (int i = 0; i < currentColumns.Count && i < cells.Length; i++)
+                    {
+                        var cell = cells[i];
+                        dict[currentColumns[i]] = cell.ValueKind switch
+                        {
+                            System.Text.Json.JsonValueKind.Null => null,
+                            System.Text.Json.JsonValueKind.String => cell.GetString(),
+                            System.Text.Json.JsonValueKind.Number => cell.GetRawText(),
+                            System.Text.Json.JsonValueKind.True => "true",
+                            System.Text.Json.JsonValueKind.False => "false",
+                            _ => cell.GetRawText()
+                        };
+                    }
+                    currentRows.Add(dict);
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            errorMessage = $"Erreur lecture {tableName} : {ex.Message}";
+        }
+        finally
+        {
+            isLoading = false;
+            StateHasChanged();
+        }
+    }
+
+    private string FormatCellValue(object? value)
+    {
+        if (value == null) return "null";
+        var str = value.ToString() ?? "";
+        // Truncate long strings
+        if (str.Length > 50) return str[..47] + "...";
+        return str;
+    }
+}

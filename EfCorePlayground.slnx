@@ -1,0 +1,8 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/EfCorePlayground/EfCorePlayground.csproj" />
+  </Folder>
+  <Folder Name="/tools/">
+    <Project Path="tools/EfCorePlayground.Precompiler/EfCorePlayground.Precompiler.csproj" />
+  </Folder>
+</Solution>

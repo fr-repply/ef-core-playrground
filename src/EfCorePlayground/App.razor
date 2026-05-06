@@ -1,0 +1,29 @@
+<ErrorBoundary @ref="_errorBoundary">
+    <ChildContent>
+        <Router AppAssembly="@typeof(App).Assembly">
+            <Found Context="routeData">
+                <RouteView RouteData="@routeData" DefaultLayout="@typeof(Layout.MainLayout)" />
+            </Found>
+            <NotFound>
+                <LayoutView Layout="@typeof(Layout.MainLayout)">
+                    <p class="text-center mt-5">Page non trouvée.</p>
+                </LayoutView>
+            </NotFound>
+        </Router>
+    </ChildContent>
+    <ErrorContent>
+        <div class="alert alert-warning m-3">
+            <p><strong>Une erreur inattendue est survenue.</strong></p>
+            <button class="btn btn-sm btn-outline-warning" @onclick="Recover">Continuer</button>
+        </div>
+    </ErrorContent>
+</ErrorBoundary>
+
+@code {
+    private ErrorBoundary? _errorBoundary;
+
+    private void Recover()
+    {
+        _errorBoundary?.Recover();
+    }
+}

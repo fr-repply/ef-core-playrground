@@ -1,0 +1,107 @@
+<Project Sdk="Microsoft.NET.Sdk.BlazorWebAssembly">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <OverrideHtmlAssetPlaceholders>true</OverrideHtmlAssetPlaceholders>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <WasmBuildNative>true</WasmBuildNative>
+    <CompressionEnabled>false</CompressionEnabled>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="EntityFrameworkCore.Projectables" Version="6.0.3" />
+    <PackageReference Include="EntityFrameworkCore.Projectables.Abstractions" Version="6.0.3" GeneratePathProperty="true" />
+    <PackageReference Include="Microsoft.AspNetCore.Components.WebAssembly" Version="10.0.5" />
+    <PackageReference Include="Microsoft.AspNetCore.Components.WebAssembly.DevServer" Version="10.0.5" PrivateAssets="all" />
+    <PackageReference Include="Microsoft.CodeAnalysis.CSharp" Version="5.0.0" />
+    <PackageReference Include="Npgsql.EntityFrameworkCore.PostgreSQL" Version="10.0.1" />
+    <PackageReference Include="System.Reflection.Metadata" Version="10.0.7" />
+  </ItemGroup>
+
+  <!-- Remove any leftover .dll files from wwwroot/ref/ that a previous build may have created.
+       The WASM ManagedToNativeGenerator task scans all *.dll in the publish output and
+       chokes on BCL assemblies (e.g. System.Runtime) because they're already in its
+       MetadataLoadContext. BCL ref assemblies are now served as *.bin to avoid this. -->
+  <Target Name="CleanRefDlls" BeforeTargets="ResolveAssemblyReferences">
+    <ItemGroup>
+      <_StaleRefDlls Include="$(MSBuildProjectDirectory)\wwwroot\ref\*.dll" />
+    </ItemGroup>
+    <Delete Files="@(_StaleRefDlls)" />
+  </Target>
+
+  <!-- Ensure wwwroot/ref/ directory and manifest.txt exist before build so that the
+       <Content> items below can be resolved by the Static Web Assets system.
+       The PrecompileExamples target populates real content AfterTargets="Build". -->
+  <Target Name="EnsureRefDir" BeforeTargets="ResolveAssemblyReferences;Build">
+    <MakeDir Directories="$(MSBuildProjectDirectory)/wwwroot/ref" />
+    <Touch Files="$(MSBuildProjectDirectory)/wwwroot/ref/manifest.txt" AlwaysCreate="true"
+           Condition="!Exists('$(MSBuildProjectDirectory)/wwwroot/ref/manifest.txt')" />
+  </Target>
+
+  <!-- Run Vite build before .NET build -->
+  <Target Name="NpmInstall" BeforeTargets="ViteBuild" Condition="!Exists('node_modules')">
+    <Exec Command="npm ci" WorkingDirectory="$(MSBuildProjectDirectory)" />
+  </Target>
+
+  <Target Name="ViteBuild" BeforeTargets="Build">
+    <Exec Command="npm run build" WorkingDirectory="$(MSBuildProjectDirectory)" />
+  </Target>
+
+  <!-- Copy the Projectables source generator to wwwroot so it can be loaded at runtime in WASM -->
+  <Target Name="CopyProjectablesGenerator" BeforeTargets="Build">
+    <MakeDir Directories="$(MSBuildProjectDirectory)\wwwroot\bin" />
+    <Copy
+      SourceFiles="$(PkgEntityFrameworkCore_Projectables_Abstractions)\analyzers\dotnet\cs\EntityFrameworkCore.Projectables.Generator.dll"
+      DestinationFolder="$(MSBuildProjectDirectory)\wwwroot\bin"
+      SkipUnchangedFiles="true" />
+  </Target>
+
+  <!--
+    Pre-compile all example snippets at build time and store the resulting DLLs as static assets
+    under wwwroot/precompiled/{sha256-hash}.dll.  The WASM runtime fetches these via HTTP instead
+    of running Roslyn on first use.
+  -->
+  <Target Name="PrecompileExamples" AfterTargets="Build">
+    <PropertyGroup>
+      <PrecompilerProject>$(MSBuildThisFileDirectory)..\..\tools\EfCorePlayground.Precompiler\EfCorePlayground.Precompiler.csproj</PrecompilerProject>
+      <PrecompiledOutputDir>$(MSBuildProjectDirectory)\wwwroot\precompiled</PrecompiledOutputDir>
+      <ProjectablesGeneratorDll>$(PkgEntityFrameworkCore_Projectables_Abstractions)\analyzers\dotnet\cs\EntityFrameworkCore.Projectables.Generator.dll</ProjectablesGeneratorDll>
+      <!-- BCL ref assemblies output dir: served as static assets for Roslyn WASM compilation -->
+      <BclRefOutputDir>$(MSBuildProjectDirectory)\wwwroot\ref</BclRefOutputDir>
+    </PropertyGroup>
+    <!-- Clear output dirs before rebuild to avoid stale DLLs from previous builds -->
+    <RemoveDir Directories="$(PrecompiledOutputDir)" />
+    <MakeDir Directories="$(PrecompiledOutputDir)" />
+    <RemoveDir Directories="$(BclRefOutputDir)" />
+    <MakeDir Directories="$(BclRefOutputDir)" />
+    <Exec
+      Command="dotnet run --project &quot;$(PrecompilerProject)&quot; -- &quot;$(OutputPath)EfCorePlayground.dll&quot; &quot;$(PrecompiledOutputDir)&quot; &quot;$(ProjectablesGeneratorDll)&quot; &quot;$(BclRefOutputDir)&quot;"
+      WorkingDirectory="$(MSBuildProjectDirectory)"
+      ContinueOnError="true" />
+  </Target>
+
+  <!-- Exclude node_modules and ClientApp from publish -->
+  <ItemGroup>
+    <Content Remove="node_modules\**" />
+    <None Remove="node_modules\**" />
+    <Content Remove="ClientApp\**" />
+    <None Remove="ClientApp\**" />
+  </ItemGroup>
+  <ItemGroup>
+    <_ContentIncludedByDefault Remove="wwwroot\css\app.css" />
+    <!-- Remove ref/*.bin from auto-detected content to avoid asset fingerprinting.
+         They are re-added below as explicit Content so they ARE published. -->
+    <Content Remove="wwwroot\ref\**" />
+  </ItemGroup>
+
+  <!-- Explicitly include ref/*.bin and manifest.txt as static content for publish.
+       Using *.bin (not *.dll) avoids the WASM ManagedToNativeGenerator scanner issue.
+       Fingerprint="false" preserves the exact filename so HTTP requests don't break. -->
+  <ItemGroup>
+    <Content Include="wwwroot\ref\manifest.txt" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" Fingerprint="false" />
+    <Content Include="wwwroot\ref\*.bin" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" Fingerprint="false" />
+  </ItemGroup>
+
+</Project>

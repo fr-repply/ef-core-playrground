@@ -1,0 +1,26 @@
+@using EfCorePlayground.Models
+<div class="card flex-grow-1 overflow-auto">
+    <div class="card-header bg-success text-white py-2">
+        <i class="bi bi-lightning me-1"></i> Exemples
+    </div>
+    <div class="list-group list-group-flush">
+        @foreach (var example in ExampleSnippets.All)
+        {
+            <button class="list-group-item list-group-item-action py-2 small"
+                    @onclick="() => SelectExample(example)">
+                <i class="bi bi-play-circle me-1 text-success"></i>
+                @example.Title
+            </button>
+        }
+    </div>
+</div>
+
+@code {
+    [Parameter] public EventCallback<string> OnExampleSelected { get; set; }
+
+    private void SelectExample(ExampleSnippets.Example example)
+    {
+        var code = example.IsFullCode ? "FULLCODE:" + example.Code : example.Code;
+        OnExampleSelected.InvokeAsync(code);
+    }
+}

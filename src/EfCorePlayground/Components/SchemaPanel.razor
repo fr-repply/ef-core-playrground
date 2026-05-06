@@ -1,0 +1,91 @@
+<div class="card mb-2 flex-shrink-0">
+    <div class="card-header bg-primary text-white py-2 d-flex justify-content-between align-items-center"
+         role="button" @onclick="() => showSchema = !showSchema">
+        <span><i class="bi bi-diagram-3 me-1"></i> Schéma</span>
+        <i class="bi @(showSchema ? "bi-chevron-up" : "bi-chevron-down")"></i>
+    </div>
+    @if (showSchema)
+    {
+        <div class="card-body p-2">
+            @foreach (var table in tables)
+            {
+                <h6 class="mb-1 text-primary">
+                    <i class="bi bi-table me-1"></i>@table.Name
+                </h6>
+                <ul class="list-unstyled small ms-3 mb-2">
+                    @foreach (var col in table.Columns)
+                    {
+                        <li>
+                            @if (col.IsPrimaryKey)
+                            {
+                                <span class="fw-bold text-warning">
+                                    <i class="bi bi-key-fill me-1"></i>@col.Name
+                                </span>
+                            }
+                            else
+                            {
+                                <span>@col.Name</span>
+                            }
+                            <span class="text-muted ms-1">@col.Type</span>
+                        </li>
+                    }
+                </ul>
+            }
+            <hr class="my-2" />
+            <div class="small">
+                <strong>Relations :</strong>
+                <ul class="list-unstyled ms-2 mb-0">
+                    <li class="text-muted">Blog 1──* Post</li>
+                    <li class="text-muted">Author 1──* Post</li>
+                    <li class="text-muted">Post *──* Tag (via PostTag)</li>
+                </ul>
+            </div>
+        </div>
+    }
+</div>
+
+@code {
+    private bool showSchema = false;
+
+    private record ColumnInfo(string Name, string Type, bool IsPrimaryKey);
+    private record TableInfo(string Name, ColumnInfo[] Columns);
+
+    private readonly TableInfo[] tables = new[]
+    {
+        new TableInfo("Blogs", new[]
+        {
+            new ColumnInfo("BlogId", "int", true),
+            new ColumnInfo("Name", "string", false),
+            new ColumnInfo("Url", "string", false),
+            new ColumnInfo("Rating", "int", false),
+            new ColumnInfo("CreatedAt", "DateTime", false),
+            new ColumnInfo("PostCount", "⚡ int (computed)", false),
+            new ColumnInfo("IsPopular", "⚡ bool (computed)", false),
+        }),
+        new TableInfo("Posts", new[]
+        {
+            new ColumnInfo("PostId", "int", true),
+            new ColumnInfo("Title", "string", false),
+            new ColumnInfo("Content", "string", false),
+            new ColumnInfo("PublishedDate", "DateTime", false),
+            new ColumnInfo("BlogId", "int (FK)", false),
+            new ColumnInfo("AuthorId", "int (FK)", false),
+            new ColumnInfo("TagCount", "⚡ int (computed)", false),
+            new ColumnInfo("IsRecent", "⚡ bool (computed)", false),
+        }),
+        new TableInfo("Authors", new[]
+        {
+            new ColumnInfo("AuthorId", "int", true),
+            new ColumnInfo("Name", "string", false),
+            new ColumnInfo("Email", "string", false),
+            new ColumnInfo("Bio", "string", false),
+            new ColumnInfo("PostCount", "⚡ int (computed)", false),
+            new ColumnInfo("IsProductive", "⚡ bool (computed)", false),
+        }),
+        new TableInfo("Tags", new[]
+        {
+            new ColumnInfo("TagId", "int", true),
+            new ColumnInfo("Name", "string", false),
+        }),
+    };
+}
