@@ -220,7 +220,7 @@ public class CodeExecutionService
                     if (fullCode.Contains("[Projectable]") || fullCode.Contains("[Projectable("))
                     {
                         var (genCompilation, generated, generatorError) =
-                            await RunProjectablesGeneratorAsync(compilation);
+                            RunProjectablesGenerator(compilation);
                         compilation = genCompilation;
 
                         if (!generated)
@@ -335,8 +335,8 @@ public class CodeExecutionService
     // ──────────────────────────────────────────────────────────────────
 
     /// <summary>
-    /// Fetches <c>EntityFrameworkCore.Projectables.Generator.dll</c> from <c>wwwroot/bin/</c>,
-    /// loads <c>ProjectionExpressionGenerator</c> and runs it via
+    /// Loads <c>EntityFrameworkCore.Projectables.Generator.dll</c> (embedded in this app assembly),
+    /// instantiates <c>ProjectionExpressionGenerator</c> and runs it via
     /// <see cref="CSharpGeneratorDriver"/> so the companion expression classes (and the
     /// <c>ProjectionRegistry</c>) are compiled into the user assembly — exactly as the build-time
     /// source generator would do.
@@ -347,19 +347,14 @@ public class CodeExecutionService
     /// hard error for code that declares <c>[Projectable]</c> members: emitting anyway produces an
     /// assembly whose projected members throw "Unable to resolve generated expression" at query time.
     /// </returns>
-    private async Task<(CSharpCompilation compilation, bool generated, string? error)> RunProjectablesGeneratorAsync(CSharpCompilation compilation)
+    private (CSharpCompilation compilation, bool generated, string? error) RunProjectablesGenerator(CSharpCompilation compilation)
     {
         var treeCountBefore = compilation.SyntaxTrees.Count();
         try
         {
-            try
-            {
-                _generatorDllCache ??= await _http.GetByteArrayAsync("bin/EntityFrameworkCore.Projectables.Generator.dll");
-            }
-            catch (Exception ex)
-            {
-                return (compilation, false, $"could not download bin/EntityFrameworkCore.Projectables.Generator.dll ({ex.GetType().Name}: {ex.Message})");
-            }
+            _generatorDllCache ??= LoadEmbeddedGeneratorDll();
+            if (_generatorDllCache is null)
+                return (compilation, false, "the Projectables generator (EntityFrameworkCore.Projectables.Generator.dll) is not embedded in the application assembly");
 
             var genAssembly = Assembly.Load(_generatorDllCache);
 
@@ -432,6 +427,29 @@ public class CodeExecutionService
         {
             return ex.Types.Where(t => t != null).ToArray()!;
         }
+    }
+
+    /// <summary>
+    /// Reads the Projectables source-generator assembly that is embedded in this app assembly
+    /// (see the <c>&lt;EmbeddedResource&gt;</c> in EfCorePlayground.csproj). Returns <c>null</c> if it
+    /// is not present. Embedding avoids depending on a loose <c>*.dll</c> under <c>wwwroot</c>, which
+    /// the WASM static-web-assets pipeline does not serve reliably (yielding a 404 at runtime).
+    /// </summary>
+    private static byte[]? LoadEmbeddedGeneratorDll()
+    {
+        var assembly = typeof(CodeExecutionService).Assembly;
+        var resourceName = assembly.GetManifestResourceNames()
+            .FirstOrDefault(n => n.EndsWith("EntityFrameworkCore.Projectables.Generator.dll", StringComparison.OrdinalIgnoreCase));
+        if (resourceName is null)
+            return null;
+
+        using var stream = assembly.GetManifestResourceStream(resourceName);
+        if (stream is null)
+            return null;
+
+        using var memory = new MemoryStream();
+        stream.CopyTo(memory);
+        return memory.ToArray();
     }
 
     // ──────────────────────────────────────────────────────────────────
