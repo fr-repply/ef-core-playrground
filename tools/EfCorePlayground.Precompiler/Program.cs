@@ -51,8 +51,10 @@ if (generatorPath != null && File.Exists(generatorPath))
     try
     {
         var genAsm  = Assembly.LoadFile(generatorPath);
-        var genType = genAsm.GetType("EntityFrameworkCore.Projectables.ProjectionExpressionGenerator")
-                      ?? genAsm.GetTypes().FirstOrDefault(t => t.Name == "ProjectionExpressionGenerator");
+        // Real fully-qualified name lives in the …Projectables.Generator namespace. Using it directly
+        // avoids the fragile Assembly.GetTypes() enumeration (which can throw ReflectionTypeLoadException).
+        var genType = genAsm.GetType("EntityFrameworkCore.Projectables.Generator.ProjectionExpressionGenerator")
+                      ?? SafeGetTypes(genAsm).FirstOrDefault(t => t.Name == "ProjectionExpressionGenerator");
 
         if (genType != null)
         {
@@ -324,6 +326,20 @@ static string ComputeHash(string code)
 {
     var bytes = SHA256.HashData(Encoding.UTF8.GetBytes(code));
     return Convert.ToHexString(bytes);
+}
+
+// Assembly.GetTypes() that tolerates a partially-loadable assembly (returns the types that did load)
+// instead of throwing ReflectionTypeLoadException.
+static Type[] SafeGetTypes(Assembly assembly)
+{
+    try
+    {
+        return assembly.GetTypes();
+    }
+    catch (ReflectionTypeLoadException ex)
+    {
+        return ex.Types.Where(t => t != null).ToArray()!;
+    }
 }
 
 // Mirrors CodeExecutionService.BuildFullCode exactly.
