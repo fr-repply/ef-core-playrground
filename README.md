@@ -35,3 +35,9 @@ npx playwright test
 ## 📖 Documentation
 
 Voir [INSTRUCTIONS.md](INSTRUCTIONS.md) pour la documentation complète, l'architecture, les bonnes pratiques et le guide de déploiement.
+
+## 📄 Licence
+
+Ce projet est distribué sous licence **Apache 2.0**. Voir le fichier [LICENSE](LICENSE) pour le texte complet.
+
+Copyright 2026 Repply
