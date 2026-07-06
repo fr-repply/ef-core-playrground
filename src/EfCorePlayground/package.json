@@ -7,8 +7,8 @@
     "dev": "vite build --watch"
   },
   "keywords": [],
-  "author": "",
-  "license": "ISC",
+  "author": "Repply",
+  "license": "Apache-2.0",
   "description": "",
   "dependencies": {
     "@electric-sql/pglite": "^0.4.5",
