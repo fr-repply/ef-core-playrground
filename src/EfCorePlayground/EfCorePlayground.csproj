@@ -49,14 +49,31 @@
     <Exec Command="npm run build" WorkingDirectory="$(MSBuildProjectDirectory)" />
   </Target>
 
-  <!-- Copy the Projectables source generator to wwwroot so it can be loaded at runtime in WASM -->
-  <Target Name="CopyProjectablesGenerator" BeforeTargets="Build">
-    <MakeDir Directories="$(MSBuildProjectDirectory)\wwwroot\bin" />
-    <Copy
-      SourceFiles="$(PkgEntityFrameworkCore_Projectables_Abstractions)\analyzers\dotnet\cs\EntityFrameworkCore.Projectables.Generator.dll"
-      DestinationFolder="$(MSBuildProjectDirectory)\wwwroot\bin"
-      SkipUnchangedFiles="true" />
-  </Target>
+  <!-- Embed the Projectables source generator INTO the app assembly so it can be loaded at runtime
+       in WASM. It was previously copied to wwwroot/bin and fetched over HTTP, but a loose *.dll under
+       wwwroot is not reliably served by the WASM static-web-assets pipeline (the same reason the BCL
+       ref assemblies below are served as *.bin), which returned a 404 and left user [Projectable]
+       code untranslatable. Embedding removes the network dependency entirely — the generator bytes
+       are read via Assembly.GetManifestResourceStream at runtime. -->
+  <ItemGroup>
+    <EmbeddedResource Include="$(PkgEntityFrameworkCore_Projectables_Abstractions)\analyzers\dotnet\cs\EntityFrameworkCore.Projectables.Generator.dll">
+      <LogicalName>EntityFrameworkCore.Projectables.Generator.dll</LogicalName>
+    </EmbeddedResource>
+  </ItemGroup>
+
+  <!-- The Projectables generator is loaded dynamically (embedded bytes) at runtime, so the WASM
+       trimmer cannot see it and prunes every assembly/member only it needs. That makes the generator
+       throw at runtime ("Could not load file or assembly 'netstandard'", "Method not found:
+       StringWriter..ctor()", missing SyntaxFactory members, …). Root the generator's dependency
+       closure so the trimmer keeps those assemblies whole. (Managed AOT is off — RunAOTCompilation
+       is not set — so this only preserves IL; it does not blow up build time.) -->
+  <ItemGroup>
+    <TrimmerRootAssembly Include="netstandard" />
+    <TrimmerRootAssembly Include="System.Private.CoreLib" />
+    <TrimmerRootAssembly Include="System.Collections.Immutable" />
+    <TrimmerRootAssembly Include="Microsoft.CodeAnalysis" />
+    <TrimmerRootAssembly Include="Microsoft.CodeAnalysis.CSharp" />
+  </ItemGroup>
 
   <!--
     Pre-compile all example snippets at build time and store the resulting DLLs as static assets
