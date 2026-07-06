@@ -61,6 +61,20 @@
     </EmbeddedResource>
   </ItemGroup>
 
+  <!-- The Projectables generator is loaded dynamically (embedded bytes) at runtime, so the WASM
+       trimmer cannot see it and prunes every assembly/member only it needs. That makes the generator
+       throw at runtime ("Could not load file or assembly 'netstandard'", "Method not found:
+       StringWriter..ctor()", missing SyntaxFactory members, …). Root the generator's dependency
+       closure so the trimmer keeps those assemblies whole. (Managed AOT is off — RunAOTCompilation
+       is not set — so this only preserves IL; it does not blow up build time.) -->
+  <ItemGroup>
+    <TrimmerRootAssembly Include="netstandard" />
+    <TrimmerRootAssembly Include="System.Private.CoreLib" />
+    <TrimmerRootAssembly Include="System.Collections.Immutable" />
+    <TrimmerRootAssembly Include="Microsoft.CodeAnalysis" />
+    <TrimmerRootAssembly Include="Microsoft.CodeAnalysis.CSharp" />
+  </ItemGroup>
+
   <!--
     Pre-compile all example snippets at build time and store the resulting DLLs as static assets
     under wwwroot/precompiled/{sha256-hash}.dll.  The WASM runtime fetches these via HTTP instead
