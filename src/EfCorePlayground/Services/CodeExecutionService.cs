@@ -212,9 +212,36 @@ public class CodeExecutionService
                     // L3 — compile with Roslyn (user-written code, or first run without static file)
                     var compilation = await CreateCompilationAsync(fullCode);
 
-                    // Run the official Projectables source generator on user code when needed
+                    // Run the official Projectables source generator on user code when needed.
+                    // If the code declares [Projectable] members but generation does not contribute any
+                    // code, surface a clear error instead of silently emitting (and caching) an assembly
+                    // whose projected members cannot be resolved at query time — that manifests as the
+                    // cryptic "Unable to resolve generated expression" InvalidOperationException.
                     if (fullCode.Contains("[Projectable]") || fullCode.Contains("[Projectable("))
-                        compilation = await RunProjectablesGeneratorAsync(compilation);
+                    {
+                        var (genCompilation, generated, generatorError) =
+                            await RunProjectablesGeneratorAsync(compilation);
+                        compilation = genCompilation;
+
+                        if (!generated)
+                        {
+                            return new ExecutionResult
+                            {
+                                Success = false,
+                                Output = "Projectables source generation failed.",
+                                Errors = new List<CompilationError>
+                                {
+                                    new()
+                                    {
+                                        Id = "PROJECTABLES",
+                                        Message = $"The [Projectable] source generator did not contribute any code: {generatorError}. " +
+                                                  "Members marked [Projectable] cannot be translated to SQL without it. " +
+                                                  "Retry the query; if it persists, use \"Clear cache\"."
+                                    }
+                                }
+                            };
+                        }
+                    }
 
                     using var ms = new MemoryStream();
                     var emitResult = compilation.Emit(ms);
@@ -310,59 +337,101 @@ public class CodeExecutionService
     /// <summary>
     /// Fetches <c>EntityFrameworkCore.Projectables.Generator.dll</c> from <c>wwwroot/bin/</c>,
     /// loads <c>ProjectionExpressionGenerator</c> and runs it via
-    /// <see cref="CSharpGeneratorDriver"/> so the companion expression classes are compiled
-    /// into the user assembly — exactly as the build-time source generator would do.
+    /// <see cref="CSharpGeneratorDriver"/> so the companion expression classes (and the
+    /// <c>ProjectionRegistry</c>) are compiled into the user assembly — exactly as the build-time
+    /// source generator would do.
     /// </summary>
-    private async Task<CSharpCompilation> RunProjectablesGeneratorAsync(CSharpCompilation compilation)
+    /// <returns>
+    /// A tuple of the (possibly updated) compilation, whether generation actually contributed code,
+    /// and a human-readable reason when it did not. Callers must treat <c>generated == false</c> as a
+    /// hard error for code that declares <c>[Projectable]</c> members: emitting anyway produces an
+    /// assembly whose projected members throw "Unable to resolve generated expression" at query time.
+    /// </returns>
+    private async Task<(CSharpCompilation compilation, bool generated, string? error)> RunProjectablesGeneratorAsync(CSharpCompilation compilation)
     {
+        var treeCountBefore = compilation.SyntaxTrees.Count();
         try
         {
-            _generatorDllCache ??= await _http.GetByteArrayAsync("bin/EntityFrameworkCore.Projectables.Generator.dll");
+            try
+            {
+                _generatorDllCache ??= await _http.GetByteArrayAsync("bin/EntityFrameworkCore.Projectables.Generator.dll");
+            }
+            catch (Exception ex)
+            {
+                return (compilation, false, $"could not download bin/EntityFrameworkCore.Projectables.Generator.dll ({ex.GetType().Name}: {ex.Message})");
+            }
+
             var genAssembly = Assembly.Load(_generatorDllCache);
 
-            var genType = genAssembly.GetType("EntityFrameworkCore.Projectables.ProjectionExpressionGenerator")
-                          ?? genAssembly.GetTypes().FirstOrDefault(t => t.Name == "ProjectionExpressionGenerator");
+            // Look up the generator by its real fully-qualified name
+            // (namespace is EntityFrameworkCore.Projectables.Generator, not …Projectables).
+            // Using the correct name means GetType() succeeds directly and we never fall back to
+            // Assembly.GetTypes(), which force-loads every type in the generator plus its transitive
+            // references and can throw ReflectionTypeLoadException at runtime (e.g. in WASM).
+            var genType = genAssembly.GetType("EntityFrameworkCore.Projectables.Generator.ProjectionExpressionGenerator")
+                          ?? SafeGetTypes(genAssembly).FirstOrDefault(t => t.Name == "ProjectionExpressionGenerator");
 
             if (genType == null)
-            {
-                Console.Error.WriteLine("[Projectables] ProjectionExpressionGenerator type not found in generator DLL.");
-                return compilation;
-            }
+                return (compilation, false, "ProjectionExpressionGenerator type not found in the generator assembly");
 
             var instance = Activator.CreateInstance(genType);
 
+            GeneratorDriver driver;
             if (instance is IIncrementalGenerator incrementalGen)
             {
-                var driver = CSharpGeneratorDriver.Create(incrementalGen);
-                driver.RunGeneratorsAndUpdateCompilation(compilation, out var updated, out var genDiags);
-
-                foreach (var d in genDiags.Where(d => d.Severity == DiagnosticSeverity.Error))
-                    Console.Error.WriteLine($"[Projectables generator] {d.GetMessage()}");
-
-                return (CSharpCompilation)updated;
+                driver = CSharpGeneratorDriver.Create(incrementalGen);
             }
-
 #pragma warning disable CS0618
-            if (instance is ISourceGenerator sourceGen)
+            else if (instance is ISourceGenerator sourceGen)
             {
-                var driver = CSharpGeneratorDriver.Create(sourceGen);
-                driver.RunGeneratorsAndUpdateCompilation(compilation, out var updated, out var genDiags);
-
-                foreach (var d in genDiags.Where(d => d.Severity == DiagnosticSeverity.Error))
-                    Console.Error.WriteLine($"[Projectables generator] {d.GetMessage()}");
-
-                return (CSharpCompilation)updated;
+                driver = CSharpGeneratorDriver.Create(sourceGen);
             }
 #pragma warning restore CS0618
+            else
+            {
+                return (compilation, false, $"generator type '{genType.FullName}' implements neither IIncrementalGenerator nor ISourceGenerator");
+            }
 
-            Console.Error.WriteLine($"[Projectables] Generator type '{genType.FullName}' does not implement IIncrementalGenerator or ISourceGenerator.");
+            driver = driver.RunGeneratorsAndUpdateCompilation(compilation, out var updated, out var genDiags);
+
+            foreach (var d in genDiags.Where(d => d.Severity == DiagnosticSeverity.Error))
+                Console.Error.WriteLine($"[Projectables generator] {d.GetMessage()}");
+
+            // A generator crash is reported by Roslyn as a run-result Exception (and a CS8785 warning),
+            // NOT as an error diagnostic — so without this check it would be swallowed, leaving an
+            // assembly with no generated expression classes.
+            var generatorException = driver.GetRunResult().Results
+                .FirstOrDefault(r => r.Exception != null).Exception;
+            if (generatorException != null)
+                return ((CSharpCompilation)updated, false, $"the generator threw {generatorException.GetType().Name}: {generatorException.Message}");
+
+            var updatedCompilation = (CSharpCompilation)updated;
+            if (updatedCompilation.SyntaxTrees.Count() <= treeCountBefore)
+                return (updatedCompilation, false, "the generator produced no expression classes for the [Projectable] member(s)");
+
+            return (updatedCompilation, true, null);
         }
         catch (Exception ex)
         {
-            Console.Error.WriteLine($"[Projectables] Failed to run generator: {ex.Message}");
+            return (compilation, false, $"{ex.GetType().Name}: {ex.Message}");
         }
+    }
 
-        return compilation;
+    /// <summary>
+    /// <see cref="Assembly.GetTypes"/> that tolerates a partially-loadable assembly by returning the
+    /// types that did load, instead of throwing <see cref="ReflectionTypeLoadException"/> when a
+    /// referenced assembly (e.g. the analyzer-only CodeFixes assembly) is not present at runtime.
+    /// </summary>
+    private static Type[] SafeGetTypes(Assembly assembly)
+    {
+        try
+        {
+            return assembly.GetTypes();
+        }
+        catch (ReflectionTypeLoadException ex)
+        {
+            return ex.Types.Where(t => t != null).ToArray()!;
+        }
     }
 
     // ──────────────────────────────────────────────────────────────────
