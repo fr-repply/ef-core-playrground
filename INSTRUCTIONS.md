@@ -22,6 +22,14 @@ dotnet run      # Vite build + Precompiler + serveur Blazor
 
 Ouvrir http://localhost:5000 dans le navigateur.
 
+### Lancer les tests unitaires
+
+```bash
+dotnet test tests/EfCorePlayground.Tests
+```
+
+Projet xUnit qui référence l'application : il couvre la réécriture des paramètres SQL pour PGlite, la détection des attributs `[Projectable]` et la mise en forme des résultats. Les helpers testés sont `internal`, exposés via `InternalsVisibleTo`.
+
 ### Lancer les tests Playwright
 
 ```bash

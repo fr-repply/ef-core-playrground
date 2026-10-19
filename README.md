@@ -26,6 +26,10 @@ dotnet run      # Build Vite + serveur Blazor
 ## 🧪 Tests
 
 ```bash
+# Tests unitaires (réécriture SQL, détection [Projectable], affichage des résultats)
+dotnet test tests/EfCorePlayground.Tests
+
+# Tests end-to-end
 cd tests/e2e
 npm install
 npx playwright install chromium
