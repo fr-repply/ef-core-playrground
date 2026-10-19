@@ -219,12 +219,14 @@ public class PgLiteDbCommand : DbCommand
         => new NpgsqlParameter();
 
     /// <summary>
-    /// Transforms Npgsql-style named parameters ($p0, $p1, …) into PgLite positional
-    /// parameters ($1, $2, …) and returns the processed SQL together with the value array.
-    /// Processing in reverse index order prevents "$p1" from being matched inside "$p10".
+    /// Matches, in a single scan, a quoted literal ('…' with '' escapes), a quoted identifier ("…"),
+    /// a comment (-- … or /* … */) or a named parameter placeholder ($p0, @p0, @__minRating_0…).
+    /// Only the placeholder alternative captures <c>name</c>: the other ones let
+    /// <see cref="PrepareForPgLite"/> leave text such as 'alice@example.com' untouched.
     /// </summary>
-    private static readonly Regex NamedParamRegex =
-        new(@"[$@]([a-zA-Z_]\w*)", RegexOptions.Compiled);
+    private static readonly Regex NamedParamRegex = new(
+        @"'[^']*(?:''[^']*)*'|""[^""]*(?:""""[^""]*)*""|--[^\r\n]*|/\*.*?\*/|[$@](?<name>[a-zA-Z_]\w*)",
+        RegexOptions.Compiled | RegexOptions.Singleline);
 
     // Matches a positional parameter placeholder like $1, $2, $10, ...
     private static readonly Regex PositionalParamRegex =
@@ -236,7 +238,7 @@ public class PgLiteDbCommand : DbCommand
     /// E.g. "DELETE … WHERE id=$1; DELETE … WHERE id=$2" with values [a,b] becomes
     ///   [("DELETE … WHERE id=$1", [a]), ("DELETE … WHERE id=$1", [b])]
     /// </summary>
-    private static IReadOnlyList<(string sql, object?[] values)> SplitIntoStatements(
+    internal static IReadOnlyList<(string sql, object?[] values)> SplitIntoStatements(
         string sql, object?[] allValues)
     {
         // Split on semicolons; discard empty fragments (trailing semicolons etc.)
@@ -264,15 +266,16 @@ public class PgLiteDbCommand : DbCommand
                 continue;
             }
 
-            // Reindex: old $N → new $k (1-based within this statement).
-            // Process descending to avoid $1 matching the prefix of $10.
-            var reindexed = part;
-            foreach (var oldIdx in refs.OrderByDescending(n => n))
-            {
-                int newIdx = refs.IndexOf(oldIdx) + 1;
-                // \b won't work after digits; use negative lookahead (?!\d) instead
-                reindexed = Regex.Replace(reindexed, $@"\${oldIdx}(?!\d)", $"${newIdx}");
-            }
+            // Reindex: old $N → new $k (1-based within this statement), in a single pass.
+            // Replacing one index at a time cascades: with refs [4,5,6,7], "$7→$4" then "$4→$1"
+            // turns the former $7 into $1 as well, and PGlite rejects the statement with
+            // "inconsistent types deduced for parameter $1". The regex is greedy on digits,
+            // so $10 is never read as $1.
+            var newIndexByOld = refs
+                .Select((oldIdx, position) => (oldIdx, newIdx: position + 1))
+                .ToDictionary(r => r.oldIdx, r => r.newIdx);
+            var reindexed = PositionalParamRegex.Replace(part,
+                m => $"${newIndexByOld[int.Parse(m.Groups[1].Value)]}");
 
             var subValues = refs
                 .Select(n => n - 1 < allValues.Length ? allValues[n - 1] : null)
@@ -289,8 +292,11 @@ public class PgLiteDbCommand : DbCommand
     /// ($p0, @p0, etc.) into PgLite positional parameters ($1, $2, …).
     /// Scans the SQL to find named placeholders rather than guessing the prefix,
     /// so this works with any Npgsql version.
+    /// Only placeholders naming a parameter of this command are rewritten, and never inside a
+    /// quoted literal, quoted identifier or comment: the seed e-mail 'alice@example.com' used to
+    /// become 'alice$1.com'.
     /// </summary>
-    private (string sql, object?[] values) PrepareForPgLite()
+    internal (string sql, object?[] values) PrepareForPgLite()
     {
         // Build name→value map from the DbParameter collection
         var paramValues = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase);
@@ -317,42 +323,44 @@ public class PgLiteDbCommand : DbCommand
         }
 
         var sql = _commandText;
-        var matches = NamedParamRegex.Matches(sql);
+
+        // Collect the placeholders naming an actual parameter, in first-appearance order
+        // → determines the positional index. Literals, quoted identifiers and comments match
+        // the regex without a "name" group and are skipped.
+        var positionByName = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        var namedValues = new List<object?>();
+        foreach (Match m in NamedParamRegex.Matches(sql))
+        {
+            var name = m.Groups["name"];
+            if (name.Success && !positionByName.ContainsKey(name.Value)
+                && paramValues.TryGetValue(name.Value, out var value))
+            {
+                positionByName[name.Value] = positionByName.Count + 1; // 1-based positional index
+                namedValues.Add(value);
+            }
+        }
 
         // DEBUG — remove once confirmed working
         Console.WriteLine($"[PgLite] RAW SQL: {sql}");
-        Console.WriteLine($"[PgLite] Named param matches: {matches.Count}");
+        Console.WriteLine($"[PgLite] Named param matches: {positionByName.Count}");
         for (int i = 0; i < _parameters.Count; i++)
             Console.WriteLine($"[PgLite]   param[{i}] name='{((DbParameter)_parameters[i]!).ParameterName}' value='{valuesInOrder[i]}'");
 
-        if (matches.Count == 0)
+        if (positionByName.Count == 0)
         {
-            // SQL already uses $1, $2, … — pass values in collection order
+            // SQL already uses $1, $2, … (or has no parameter at all) — pass values in collection order
             return (sql, valuesInOrder);
         }
 
-        // Collect unique param names in first-appearance order → determines positional index
-        var orderedNames = new List<string>();
-        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        foreach (Match m in matches)
-            if (seen.Add(m.Groups[1].Value))
-                orderedNames.Add(m.Groups[1].Value);
-
-        // Replace longest names first to avoid "$p1" matching the prefix of "$p10"
-        foreach (var name in orderedNames.OrderByDescending(n => n.Length))
+        // Single pass: a whole placeholder is matched at once, so "$p1" never hits the prefix of "$p10"
+        sql = NamedParamRegex.Replace(sql, m =>
         {
-            int pos = orderedNames.IndexOf(name) + 1; // 1-based positional index
-            sql = sql.Replace($"${name}", $"${pos}");
-            sql = sql.Replace($"@{name}", $"${pos}");
-        }
-
-        // Build values array in the order params first appear in SQL
-        var namedValues = orderedNames
-            .Select(n => paramValues.TryGetValue(n, out var v) ? v : null)
-            .ToArray();
+            var name = m.Groups["name"];
+            return name.Success && positionByName.TryGetValue(name.Value, out var pos) ? $"${pos}" : m.Value;
+        });
 
         Console.WriteLine($"[PgLite] TRANSFORMED SQL: {sql}");
-        return (sql, namedValues);
+        return (sql, namedValues.ToArray());
     }
 
     /// <summary>

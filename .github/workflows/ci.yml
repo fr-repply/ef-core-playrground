@@ -24,6 +24,9 @@ jobs:
       - name: Build (Debug)
         run: dotnet build src/EfCorePlayground/EfCorePlayground.csproj -c Debug
 
+      - name: Run unit tests
+        run: dotnet test tests/EfCorePlayground.Tests/EfCorePlayground.Tests.csproj -c Debug
+
       - name: Verify ref assemblies exist
         run: |
           echo "Checking wwwroot/ref/manifest.txt..."

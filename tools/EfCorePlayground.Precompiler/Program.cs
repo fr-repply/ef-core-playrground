@@ -14,6 +14,7 @@ using System.Reflection.PortableExecutable;
 using System.Security.Cryptography;
 using System.Text;
 using EfCorePlayground.Models;
+using EfCorePlayground.Services;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.EntityFrameworkCore;
@@ -90,8 +91,8 @@ foreach (var example in ExampleSnippets.All)
 
     var comp = CreateCompilation(fullCode, references);
 
-    // Run Projectables generator if the snippet defines [Projectable]
-    if (fullCode.Contains("[Projectable]") || fullCode.Contains("[Projectable("))
+    // Run Projectables generator if the snippet declares a real [Projectable] attribute (not a comment)
+    if (comp.SyntaxTrees.Any(ProjectableAttributeDetector.HasProjectableAttribute))
         comp = RunGenerator(comp, projectablesGen, projectablesSrc);
 
     using var ms = new MemoryStream();

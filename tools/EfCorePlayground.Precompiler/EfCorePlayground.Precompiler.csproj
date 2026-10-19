@@ -20,6 +20,8 @@
   <!-- Link ExampleSnippets from the main project — single source of truth -->
   <ItemGroup>
     <Compile Include="..\..\src\EfCorePlayground\Models\ExampleSnippets.cs" />
+    <!-- Same [Projectable] detection as the runtime CodeExecutionService -->
+    <Compile Include="..\..\src\EfCorePlayground\Services\ProjectableAttributeDetector.cs" />
   </ItemGroup>
 
 </Project>

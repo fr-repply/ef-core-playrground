@@ -59,7 +59,9 @@ namespace EfCorePlayground.UserCode
 ```
 `PrefixLineCount = 14` / `SuffixLineCount = 3` permettent de mapper les erreurs sur les lignes affichées dans l'éditeur.
 
-**Détection automatique `[Projectable]`** : dans `ExecuteAsync`, si le code source contient `[Projectable]` ou `[Projectable(`, le source generator `RunProjectablesGeneratorAsync()` est déclenché automatiquement.
+**Détection automatique `[Projectable]`** : dans `ExecuteAsync`, si l'arbre syntaxique Roslyn contient un vrai attribut `Projectable` ou `ProjectableAttribute` (qualifié ou non), le source generator est déclenché via `RunProjectablesGenerator()`. La détection est faite par `ProjectableAttributeDetector`, partagé avec le Precompiler (fichier lié) : un `[Projectable]` cité dans un commentaire ou une chaîne ne déclenche **pas** le générateur, qui sinon ne produirait rien et ferait échouer l'exécution.
+
+**Affichage des résultats** (`FormatResult`) : une collection de scalaires (primitifs, `string`, `decimal`, dates, `Guid`, enums…), par exemple `.Select(p => p.Title)`, est affichée dans une colonne unique `Value`. Pour les objets, une colonne par propriété publique, hors indexeurs.
 
 **Métadonnées Roslyn** : récupérées depuis `_framework/blazor.boot.json` (ou `dotnet.boot.json`). Seules les DLLs PE managées (avec header CLI) sont acceptées — les artifacts natifs WASM sont filtrés via `IsManagedPe()`. En cas d'échec, une liste de fallback codée en dur est utilisée.
 
@@ -70,6 +72,12 @@ Couche d'adaptation EF Core → PGlite :
 - `PgLiteModificationCommandBatch`, `PgLiteDatabaseCreator`
 
 Tous les appels SQL transitent via `IJSRuntime` → `window.pgliteInterop` (JS).
+
+`pgliteInterop.query` interroge PGlite en `rowMode: 'array'` : les lignes sont lues **par position**. En mode objet, deux colonnes de même nom (`b."Name"` et `a."Name"`, fréquent dès qu'une projection contient une collection) s'écraseraient.
+
+Réécriture des paramètres (`PgLiteDbCommand`) :
+- `PrepareForPgLite()` convertit les placeholders nommés (`@p0`, `$p0`…) en positionnels (`$1`, `$2`…) en **une seule passe** ; seuls les noms présents dans la collection de paramètres sont réécrits, jamais à l'intérieur d'un littéral `'…'`, d'un identifiant `"…"` ou d'un commentaire (le seed contient `'alice@example.com'`).
+- `SplitIntoStatements()` découpe un batch EF Core (`INSERT …; INSERT …`) et renumérote les `$N` de chaque instruction à partir de `$1`, elle aussi en une seule passe (`Regex.Replace` + table ancien → nouvel index) pour éviter les remplacements en cascade.
 
 `PgLiteJsRuntime.Instance` est un **singleton** alimenté dans `RunCompiledCode()` avant chaque exécution :
 ```csharp

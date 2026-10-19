@@ -30,12 +30,14 @@ window.pgliteInterop = {
     query: async function (sql, params) {
         if (!window._pgliteDb) throw new Error('PGlite not initialized. Call init() first.');
 
-        const result = await window._pgliteDb.query(sql, params || []);
+        // rowMode 'array': rows are read by position. In the default object mode, two columns
+        // with the same name (e.g. b."Name" and a."Name" in one projection) collapse into a
+        // single key and the last one silently overwrites the first.
+        const result = await window._pgliteDb.query(sql, params || [], { rowMode: 'array' });
 
         const columns = (result.fields || []).map(f => f.name);
         const rows = (result.rows || []).map(row =>
-            columns.map(col => {
-                const val = row[col];
+            row.map(val => {
                 // Convert Date objects to ISO strings for JSON serialization
                 if (val instanceof Date) return val.toISOString();
                 return val;

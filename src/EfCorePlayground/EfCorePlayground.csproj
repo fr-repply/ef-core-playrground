@@ -20,6 +20,11 @@
     <PackageReference Include="System.Reflection.Metadata" Version="10.0.7" />
   </ItemGroup>
 
+  <!-- Unit tests exercise internal helpers (SQL rewriting, result formatting) -->
+  <ItemGroup>
+    <InternalsVisibleTo Include="EfCorePlayground.Tests" />
+  </ItemGroup>
+
   <!-- Remove any leftover .dll files from wwwroot/ref/ that a previous build may have created.
        The WASM ManagedToNativeGenerator task scans all *.dll in the publish output and
        chokes on BCL assemblies (e.g. System.Runtime) because they're already in its
