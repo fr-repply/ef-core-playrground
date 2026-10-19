@@ -782,7 +782,10 @@ public class CodeExecutionService
         };
     }
 
-    private (string output, List<string>? columns, List<Dictionary<string, object?>>? rows) FormatResult(object? result)
+    /// <summary>Single column used to display a collection of scalar values (strings, numbers, dates…).</summary>
+    internal const string ScalarColumnName = "Value";
+
+    internal static (string output, List<string>? columns, List<Dictionary<string, object?>>? rows) FormatResult(object? result)
     {
         if (result == null)
             return ("null", null, null);
@@ -792,7 +795,7 @@ public class CodeExecutionService
 
         if (result is IEnumerable enumerable && result is not string)
         {
-            var items = new List<object>();
+            var items = new List<object?>();
             foreach (var item in enumerable)
             {
                 items.Add(item);
@@ -801,9 +804,22 @@ public class CodeExecutionService
             if (items.Count == 0)
                 return ("Empty collection (0 results)", new List<string>(), new List<Dictionary<string, object?>>());
 
-            // Extract columns from the first item
-            var firstItem = items[0];
-            var properties = firstItem.GetType().GetProperties(BindingFlags.Public | BindingFlags.Instance);
+            // A projection such as .Select(p => p.Title) yields scalar items: their properties are
+            // not columns (string.Chars is an indexer, reading it by reflection throws
+            // "Arg_DlgtTargMeth"), so they are shown in a single "Value" column.
+            var itemType = items.FirstOrDefault(item => item != null)?.GetType();
+            if (itemType == null || IsScalarType(itemType))
+            {
+                var scalarRows = items
+                    .Select(item => new Dictionary<string, object?> { [ScalarColumnName] = FormatCellValue(item) })
+                    .ToList();
+                return ($"{items.Count} result(s)", new List<string> { ScalarColumnName }, scalarRows);
+            }
+
+            // Extract columns from the first non-null item; indexers (this[…]) are not columns
+            var properties = itemType.GetProperties(BindingFlags.Public | BindingFlags.Instance)
+                .Where(p => p.GetIndexParameters().Length == 0)
+                .ToArray();
             var columns = properties.Select(p => p.Name).ToList();
 
             var rows = new List<Dictionary<string, object?>>();
@@ -812,15 +828,7 @@ public class CodeExecutionService
                 var row = new Dictionary<string, object?>();
                 foreach (var prop in properties)
                 {
-                    var value = prop.GetValue(item);
-                    // Avoid serializing navigation properties (circular refs)
-                    if (value is IEnumerable && value is not string && value is not Array)
-                        row[prop.Name] = "[Collection]";
-                    else if (value != null && !value.GetType().IsPrimitive && value is not string
-                             && value is not DateTime && value is not decimal && !value.GetType().IsEnum)
-                        row[prop.Name] = value.ToString();
-                    else
-                        row[prop.Name] = value;
+                    row[prop.Name] = item == null ? null : FormatCellValue(prop.GetValue(item));
                 }
                 rows.Add(row);
             }
@@ -831,6 +839,26 @@ public class CodeExecutionService
         // Single value
         var json = JsonSerializer.Serialize(result, JsonOptions);
         return (json, null, null);
+    }
+
+    private static bool IsScalarType(Type type)
+        => type.IsPrimitive || type.IsEnum
+           || type == typeof(string) || type == typeof(decimal)
+           || type == typeof(DateTime) || type == typeof(DateTimeOffset)
+           || type == typeof(DateOnly) || type == typeof(TimeOnly) || type == typeof(TimeSpan)
+           || type == typeof(Guid);
+
+    private static object? FormatCellValue(object? value)
+    {
+        // Avoid serializing navigation properties (circular refs)
+        if (value is IEnumerable && value is not string && value is not Array)
+            return "[Collection]";
+
+        if (value != null && !value.GetType().IsPrimitive && value is not string
+            && value is not DateTime && value is not decimal && !value.GetType().IsEnum)
+            return value.ToString();
+
+        return value;
     }
 
     public void Dispose()
