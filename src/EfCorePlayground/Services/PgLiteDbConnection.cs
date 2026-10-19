@@ -236,7 +236,7 @@ public class PgLiteDbCommand : DbCommand
     /// E.g. "DELETE … WHERE id=$1; DELETE … WHERE id=$2" with values [a,b] becomes
     ///   [("DELETE … WHERE id=$1", [a]), ("DELETE … WHERE id=$1", [b])]
     /// </summary>
-    private static IReadOnlyList<(string sql, object?[] values)> SplitIntoStatements(
+    internal static IReadOnlyList<(string sql, object?[] values)> SplitIntoStatements(
         string sql, object?[] allValues)
     {
         // Split on semicolons; discard empty fragments (trailing semicolons etc.)
@@ -264,15 +264,16 @@ public class PgLiteDbCommand : DbCommand
                 continue;
             }
 
-            // Reindex: old $N → new $k (1-based within this statement).
-            // Process descending to avoid $1 matching the prefix of $10.
-            var reindexed = part;
-            foreach (var oldIdx in refs.OrderByDescending(n => n))
-            {
-                int newIdx = refs.IndexOf(oldIdx) + 1;
-                // \b won't work after digits; use negative lookahead (?!\d) instead
-                reindexed = Regex.Replace(reindexed, $@"\${oldIdx}(?!\d)", $"${newIdx}");
-            }
+            // Reindex: old $N → new $k (1-based within this statement), in a single pass.
+            // Replacing one index at a time cascades: with refs [4,5,6,7], "$7→$4" then "$4→$1"
+            // turns the former $7 into $1 as well, and PGlite rejects the statement with
+            // "inconsistent types deduced for parameter $1". The regex is greedy on digits,
+            // so $10 is never read as $1.
+            var newIndexByOld = refs
+                .Select((oldIdx, position) => (oldIdx, newIdx: position + 1))
+                .ToDictionary(r => r.oldIdx, r => r.newIdx);
+            var reindexed = PositionalParamRegex.Replace(part,
+                m => $"${newIndexByOld[int.Parse(m.Groups[1].Value)]}");
 
             var subValues = refs
                 .Select(n => n - 1 < allValues.Length ? allValues[n - 1] : null)
