@@ -64,6 +64,74 @@ public class PgLiteDbCommandTests
         Assert.Same(values, statement.values);
     }
 
+    // ── PrepareForPgLite ────────────────────────────────────────────────
+
+    [Fact]
+    public void PrepareForPgLite_WhenSeedInsertContainsEmailLiterals_LeavesSqlUntouched()
+    {
+        // EnsureCreated inserts the HasData seed with literals and no DbParameter at all
+        const string sql =
+            "INSERT INTO \"Authors\" (\"AuthorId\", \"Bio\", \"Email\", \"Name\")\n" +
+            "VALUES (1, 'Développeuse .NET passionnée', 'alice@example.com', 'Alice Martin');\n" +
+            "INSERT INTO \"Authors\" (\"AuthorId\", \"Bio\", \"Email\", \"Name\")\n" +
+            "VALUES (2, 'L''architecte', 'bob@example.com', 'Bob Dupont');";
+
+        var (preparedSql, values) = CreateCommand(sql).PrepareForPgLite();
+
+        Assert.Equal(sql, preparedSql);
+        Assert.Empty(values);
+    }
+
+    [Fact]
+    public void PrepareForPgLite_WhenLiteralLooksLikeAParameter_RewritesOnlyThePlaceholder()
+    {
+        const string sql = "SELECT a.\"Name\" FROM \"Authors\" AS a WHERE a.\"Email\" <> 'contact@p0.fr' AND a.\"Name\" = @p0";
+
+        var (preparedSql, values) = CreateCommand(sql, "Alice Martin").PrepareForPgLite();
+
+        Assert.Equal("SELECT a.\"Name\" FROM \"Authors\" AS a WHERE a.\"Email\" <> 'contact@p0.fr' AND a.\"Name\" = $1", preparedSql);
+        Assert.Equal(new object?[] { "Alice Martin" }, values);
+    }
+
+    [Fact]
+    public void PrepareForPgLite_WhenPlaceholderTextInCommentOrQuotedIdentifier_LeavesItUntouched()
+    {
+        const string sql =
+            "-- Requête taguée pour @p1\n" +
+            "/* rappel : $p1 */\n" +
+            "SELECT t.\"col@p1\" FROM t WHERE t.id = @p1";
+
+        var (preparedSql, values) = CreateCommand(sql, "ignoré", 7).PrepareForPgLite();
+
+        Assert.Equal(
+            "-- Requête taguée pour @p1\n" +
+            "/* rappel : $p1 */\n" +
+            "SELECT t.\"col@p1\" FROM t WHERE t.id = $1",
+            preparedSql);
+        Assert.Equal(new object?[] { 7 }, values);
+    }
+
+    [Fact]
+    public void PrepareForPgLite_WhenNamesShareAPrefix_NumbersByFirstAppearance()
+    {
+        var parameterValues = Enumerable.Range(0, 11).Cast<object?>().ToArray();
+        const string sql = "SELECT @p10, @p1, @p10, $p2";
+
+        var (preparedSql, values) = CreateCommand(sql, parameterValues).PrepareForPgLite();
+
+        Assert.Equal("SELECT $1, $2, $1, $3", preparedSql);
+        Assert.Equal(new object?[] { 10, 1, 2 }, values);
+    }
+
+    [Fact]
+    public void PrepareForPgLite_WhenAtWordIsNotAParameter_LeavesItUntouched()
+    {
+        var (preparedSql, values) = CreateCommand("SELECT @p0, @inconnu", 1).PrepareForPgLite();
+
+        Assert.Equal("SELECT $1, @inconnu", preparedSql);
+        Assert.Equal(new object?[] { 1 }, values);
+    }
+
     // ── Full command path, through a fake JS runtime ────────────────────
 
     [Fact]
