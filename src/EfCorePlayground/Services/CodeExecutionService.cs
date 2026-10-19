@@ -217,7 +217,8 @@ public class CodeExecutionService
                     // code, surface a clear error instead of silently emitting (and caching) an assembly
                     // whose projected members cannot be resolved at query time — that manifests as the
                     // cryptic "Unable to resolve generated expression" InvalidOperationException.
-                    if (fullCode.Contains("[Projectable]") || fullCode.Contains("[Projectable("))
+                    // Detection walks the syntax tree: "[Projectable]" in a comment must not trigger it.
+                    if (compilation.SyntaxTrees.Any(ProjectableAttributeDetector.HasProjectableAttribute))
                     {
                         var (genCompilation, generated, generatorError) =
                             RunProjectablesGenerator(compilation);
